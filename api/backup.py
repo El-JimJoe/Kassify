@@ -72,7 +72,7 @@ def summary_from_dump(payload):
                 continue
             balances[mid] = balances.get(mid, 0) + int(entry.get("amount_cents") or 0)
         soll = sum(balances.values())
-        snaps = box.get("snapshots") or []
+        snaps = sorted(box.get("snapshots") or [], key=lambda s: (s.get("booked_on") or "", s.get("id") or 0))
         ist = snaps[-1]["amount_cents"] if snaps else box.get("opening_balance_cents") or 0
         out.append(
             {
@@ -187,7 +187,7 @@ def insert_cashbox(box, keep_ids=False, name=None, skip_access_roles=None):
     event_map, rev_map, purchase_map = {}, {}, {}
     for event in box.get("drinkEvents") or []:
         ev = {**event, "cashbox_id": new_id}
-        cols = ["cashbox_id", "booked_on", "label", "status", "created_at"]
+        cols = ["cashbox_id", "booked_on", "label", "status", "price_cents", "created_at"]
         if keep_ids:
             event_map[event["id"]] = _insert("drink_events", ev, ["id"] + cols)
         else:

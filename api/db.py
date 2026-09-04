@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS drink_events (
     booked_on TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open',
+    price_cents INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS drink_revisions (
@@ -138,6 +139,19 @@ def now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def migrate(conn):
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(drink_events)")}
+    if "price_cents" not in columns:
+        conn.execute("ALTER TABLE drink_events ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        UPDATE drink_events
+        SET price_cents = (SELECT drink_price_cents FROM cashboxes WHERE cashboxes.id = drink_events.cashbox_id)
+        WHERE price_cents = 0
+        """
+    )
+
+
 def connect():
     global CONN
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -146,6 +160,7 @@ def connect():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    migrate(conn)
     conn.commit()
     CONN = conn
     return conn

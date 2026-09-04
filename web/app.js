@@ -427,10 +427,15 @@ async function renderHome() {
       ${metricCard("Forderung", box.receivableCents)}
       ${metricCard("Offene Auslagen", box.openExpenseCents)}
       ${metricCard("Verfügbar nach Auslagen", box.availableAfterExpensesCents)}
-      ${metricCard("Erwartet", box.expectedCents)}
+      ${metricCard(`Erwartet zum ${isoToDE(box.expectedDate)}`, box.expectedCents)}
       ${metricCard("Abweichung", box.deviationCents, deviation)}
       ${metricCard("Ausfälle", box.writeoffCents)}
     </div>
+    ${
+      box.flowsSinceIstCents
+        ? `<p class="hint">Seit dem Ist-Stand vom ${isoToDE(box.istDate)} sind ${euro(box.flowsSinceIstCents)} auf dem Konto bewegt worden. Für die Abweichung zählen sie erst mit dem nächsten erfassten Stand.</p>`
+        : ""
+    }
     <p><button class="ghost" type="button" id="kick-sessions">Andere Geräte abmelden</button></p>
   </section>`
     )
@@ -513,6 +518,12 @@ function renderMemberNew() {
       ${field("Kürzel", "shortName")}
       ${field("Notiz", "note")}
       ${moneyField("Startguthaben (optional)", "start")}
+      <label class="field">Woher kommt das Startguthaben?
+        <select name="startKind">
+          <option value="opening">Liegt schon im Anfangsbestand der Kasse</option>
+          <option value="deposit">Ist gerade neu auf dem Konto eingegangen</option>
+        </select>
+      </label>
       <p class="hint">Startguthaben nur eintragen, wenn das Geld wirklich schon auf dem Konto liegt.</p>
       ${dateField("Datum", "date")}
       <p class="error" id="form-error" hidden></p>
@@ -528,6 +539,7 @@ function renderMemberNew() {
         shortName: data.shortName,
         note: data.note,
         startBalanceCents: parseEuro(data.start),
+        startKind: data.startKind,
         date: requireDate(data.date),
       }),
     });
@@ -726,11 +738,12 @@ async function renderDrinks() {
   if (state.view !== "drinks") return;
   const qtys = {};
   if (existing) existing.lines.forEach((l) => (qtys[l.memberId] = l.qty));
+  const price = existing ? existing.priceCents : box.drink_price_cents;
   if (
     !showIf(
       "drinks",
       `<section>
-    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(box.drink_price_cents)} / Strich</p></div>
+    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(price)} / Strich</p></div>
     <form id="drink-form">
       ${dateField("Datum", "date", existing?.booked_on)}
       ${field("Bezeichnung", "label", existing?.label || "", `placeholder="z. B. Treffen"`)}
@@ -759,14 +772,14 @@ async function renderDrinks() {
           <input class="qty-input" inputmode="numeric" value="${counts[m.id]}" />
           <button type="button" data-act="inc">+</button>
         </div>
-        <strong>${euro(counts[m.id] * box.drink_price_cents)}</strong>
+        <strong>${euro(counts[m.id] * price)}</strong>
       </div>`);
       const input = row.querySelector("input");
       const sync = () => {
         counts[m.id] = Math.max(0, Number(input.value || 0));
         input.value = String(counts[m.id]);
         sum();
-        row.querySelector("strong:last-child").textContent = euro(counts[m.id] * box.drink_price_cents);
+        row.querySelector("strong:last-child").textContent = euro(counts[m.id] * price);
       };
       row.querySelector('[data-act="dec"]').addEventListener("click", () => {
         counts[m.id] = Math.max(0, counts[m.id] - 1);
@@ -786,7 +799,7 @@ async function renderDrinks() {
   function sum() {
     const qty = Object.values(counts).reduce((s, n) => s + n, 0);
     const people = Object.values(counts).filter((n) => n > 0).length;
-    document.getElementById("drink-sum").textContent = `${qty} Striche = ${euro(qty * box.drink_price_cents)}, ${people} Personen`;
+    document.getElementById("drink-sum").textContent = `${qty} Striche = ${euro(qty * price)}, ${people} Personen`;
   }
   draw();
   bindForm("drink-form", async (data) => {
@@ -844,13 +857,20 @@ async function renderAccount() {
   else {
     body = `${link}
       <div class="metrics">
-        ${metricCard("Ist", data.metrics.istCents)}
-        ${metricCard("Erwartet", data.metrics.expectedCents)}
+        ${metricCard(`Ist vom ${isoToDE(data.metrics.istDate)}`, data.metrics.istCents)}
+        ${metricCard(`Erwartet zum ${isoToDE(data.metrics.expectedDate)}`, data.metrics.expectedCents)}
         ${metricCard("Abweichung", data.metrics.deviationCents, data.metrics.deviationCents !== 0)}
         ${metricCard("Überschuss", data.metrics.surplusCents)}
       </div>
       <h3>Überschuss-Verlauf</h3>
-      <ul class="list">${data.surplusHistory.map((h) => `<li class="row-split"><span>${isoToDE(h.date)}</span><strong>${euro(h.surplusCents)}</strong></li>`).join("")}</ul>
+      <ul class="list">${data.surplusHistory
+        .map(
+          (h) => `<li>
+            <div class="row-split"><span>${isoToDE(h.date)}</span><strong>${euro(h.surplusCents)}</strong></div>
+            <div class="muted">Ist ${euro(h.istCents)} − Soll ${euro(h.sollCents)}</div>
+          </li>`
+        )
+        .join("")}</ul>
       ${
         canWrite()
           ? `<form id="snap-form" class="stack">
@@ -1168,7 +1188,7 @@ async function renderManage() {
     </form>
     <form id="del-form" class="stack">
       <h3>Kasse löschen</h3>
-      <p class="hint">Endgültig. ${box.memberCount} Mitglieder, Soll ${euro(box.sollCents)}, Ist ${euro(box.istCents)}. Zuerst Export.</p>
+      <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Soll ${euro(box.sollCents)}, Ist ${euro(box.istCents)}. Zuerst Export.</p>
       <button class="ghost" type="button" id="export-before">Export dieser Kasse</button>
       ${field("Vollständigen Kassennamen eintippen", "confirmName")}
       <button class="pay" type="submit">Unwiderruflich löschen</button>

@@ -64,7 +64,7 @@ def current_drink_qtys(event_id):
 
 
 def apply_drink_ledger(box, event, qtys, previous, kind, booked_on):
-    price = box["drink_price_cents"]
+    price = event["price_cents"]
     keys = set(previous) | set(qtys)
     for member_id in keys:
         delta = int(qtys.get(member_id, 0)) - int(previous.get(member_id, 0))
@@ -78,6 +78,13 @@ def apply_drink_ledger(box, event, qtys, previous, kind, booked_on):
             """,
             (box["id"], member_id, kind, amount, booked_on, event["id"], f"{delta}× Getränk", db.now()),
         )
+
+
+def euro_string(cents):
+    cents = int(cents)
+    sign = "-" if cents < 0 else ""
+    n = abs(cents)
+    return f"{sign}{n // 100},{n % 100:02d}"
 
 
 def name_key(value):
@@ -522,12 +529,24 @@ class Handler(BaseHTTPRequestHandler):
         )
         start = int(body.get("startBalanceCents") or 0)
         if start:
+            # "opening": das Geld steckt schon im Anfangsbestand der Kasse und darf
+            # nicht ein zweites Mal als Zufluss in die Kontrollrechnung eingehen.
+            arrived = body.get("startKind") == "deposit"
             db.execute(
                 """
                 INSERT INTO ledger(cashbox_id, member_id, kind, amount_cents, money_cents, booked_on, ref_type, ref_id, note, created_at)
-                VALUES(?, ?, 'start', ?, 0, ?, 'member', ?, 'Startguthaben', ?)
+                VALUES(?, ?, 'start', ?, ?, ?, 'member', ?, ?, ?)
                 """,
-                (cashbox_id, member_id, start, str(body.get("date") or db.now()[:10]), member_id, db.now()),
+                (
+                    cashbox_id,
+                    member_id,
+                    start,
+                    start if arrived else 0,
+                    str(body.get("date") or db.now()[:10]),
+                    member_id,
+                    "Startguthaben · Eingang" if arrived else "Startguthaben · im Anfangsbestand",
+                    db.now(),
+                ),
             )
         db.audit(cashbox_id, "member", member_id, "create", ctx["role"], None, body)
         return member_payload(db.one("SELECT * FROM members WHERE id = ?", (member_id,)))
@@ -684,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
             qtys = current_drink_qtys(event["id"])
             total_qty = sum(qtys.values())
             people = sum(1 for q in qtys.values() if q > 0)
-            out.append({**event, "qty": total_qty, "people": people, "totalCents": total_qty * box["drink_price_cents"]})
+            out.append({**event, "qty": total_qty, "people": people, "totalCents": total_qty * event["price_cents"]})
         return {"events": out}
 
     def drink_detail(self, ctx, cashbox_id, event_id):
@@ -696,11 +715,11 @@ class Handler(BaseHTTPRequestHandler):
         lines = []
         for member_id, qty in qtys.items():
             member = db.one("SELECT name FROM members WHERE id = ?", (member_id,))
-            lines.append({"memberId": member_id, "name": member["name"] if member else "?", "qty": qty, "cents": qty * box["drink_price_cents"]})
+            lines.append({"memberId": member_id, "name": member["name"] if member else "?", "qty": qty, "cents": qty * event["price_cents"]})
         return {
             **event,
             "lines": lines,
-            "priceCents": box["drink_price_cents"],
+            "priceCents": event["price_cents"],
             "audit": db.rows(
                 "SELECT * FROM audit WHERE object_type = 'drink_event' AND object_id = ? ORDER BY id DESC",
                 (str(event_id),),
@@ -731,10 +750,16 @@ class Handler(BaseHTTPRequestHandler):
         body = self.read_json()
         event_id = db.execute(
             """
-            INSERT INTO drink_events(cashbox_id, booked_on, label, status, created_at)
-            VALUES(?, ?, ?, 'open', ?)
+            INSERT INTO drink_events(cashbox_id, booked_on, label, status, price_cents, created_at)
+            VALUES(?, ?, ?, 'open', ?, ?)
             """,
-            (cashbox_id, str(body.get("date") or ""), str(body.get("label") or "").strip(), db.now()),
+            (
+                cashbox_id,
+                str(body.get("date") or ""),
+                str(body.get("label") or "").strip(),
+                box["drink_price_cents"],
+                db.now(),
+            ),
         )
         event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
         self.save_revision(event_id, ctx["role"], body.get("lines") or [])
@@ -1041,7 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
         scoped(ctx, cashbox_id)
         start = qs.get("from", [""])[0]
         end = qs.get("to", [""])[0]
-        lines = ["Datum;Mitglied;Art;Betrag_EUR;Notiz"]
+        lines = ["Datum;Mitglied;Art;Betrag_EUR;Geldbewegung_EUR;Notiz"]
         query = "SELECT l.*, m.name AS member_name FROM ledger l LEFT JOIN members m ON m.id = l.member_id WHERE l.cashbox_id = ?"
         params = [cashbox_id]
         if start:
@@ -1052,9 +1077,17 @@ class Handler(BaseHTTPRequestHandler):
             params.append(end)
         query += " ORDER BY l.booked_on, l.id"
         for entry in db.rows(query, params):
-            amount = f"{entry['amount_cents'] / 100:.2f}".replace(".", ",")
             lines.append(
-                f"{entry['booked_on']};{entry['member_name'] or ''};{entry['kind']};{amount};{(entry['note'] or '').replace(';', ',')}"
+                ";".join(
+                    [
+                        entry["booked_on"],
+                        entry["member_name"] or "",
+                        entry["kind"],
+                        euro_string(entry["amount_cents"]),
+                        euro_string(entry["money_cents"]),
+                        (entry["note"] or "").replace(";", ","),
+                    ]
+                )
             )
         csv = "\n".join(lines)
         body = csv.encode("utf-8-sig")

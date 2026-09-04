@@ -58,12 +58,36 @@ def writeoff_total(cashbox_id):
     return int(row["n"] if row else 0)
 
 
-def expected_balance(cashbox):
+def soll_on(cashbox_id, date):
+    row = one(
+        "SELECT COALESCE(SUM(amount_cents), 0) AS n FROM ledger WHERE cashbox_id = ? AND booked_on <= ?",
+        (cashbox_id, date),
+    )
+    return int(row["n"] if row else 0)
+
+
+def expected_balance(cashbox, as_of):
+    """Kontostand, der am Stichtag des Ist-Standes auf dem Konto liegen müsste.
+
+    Bewegungen am Tag des Anfangsbestandes stecken bereits in diesem, Bewegungen
+    nach dem Stichtag sind im erfassten Ist-Stand noch nicht enthalten.
+    """
     flows = one(
-        "SELECT COALESCE(SUM(money_cents), 0) AS n FROM ledger WHERE cashbox_id = ?",
-        (cashbox["id"],),
+        """
+        SELECT COALESCE(SUM(money_cents), 0) AS n FROM ledger
+        WHERE cashbox_id = ? AND booked_on > ? AND booked_on <= ?
+        """,
+        (cashbox["id"], cashbox["opening_date"], as_of),
     )
     return cashbox["opening_balance_cents"] + int(flows["n"] if flows else 0)
+
+
+def flows_after(cashbox_id, date):
+    row = one(
+        "SELECT COALESCE(SUM(money_cents), 0) AS n FROM ledger WHERE cashbox_id = ? AND booked_on > ?",
+        (cashbox_id, date),
+    )
+    return int(row["n"] if row else 0)
 
 
 def metrics(cashbox):
@@ -79,11 +103,13 @@ def metrics(cashbox):
     surplus = ist - soll
     available = ist - positive
     expenses = open_expenses(cashbox_id)
-    erwartet = expected_balance(cashbox)
+    erwartet = expected_balance(cashbox, ist_date)
     deviation = erwartet - ist
-    members = one("SELECT COUNT(*) AS n FROM members WHERE cashbox_id = ?", (cashbox_id,))
+    active = one("SELECT COUNT(*) AS n FROM members WHERE cashbox_id = ? AND active = 1", (cashbox_id,))
+    total = one("SELECT COUNT(*) AS n FROM members WHERE cashbox_id = ?", (cashbox_id,))
     return {
-        "memberCount": int(members["n"] if members else 0),
+        "memberCount": int(active["n"] if active else 0),
+        "totalMemberCount": int(total["n"] if total else 0),
         "sollCents": soll,
         "istCents": ist,
         "istDate": ist_date,
@@ -95,14 +121,15 @@ def metrics(cashbox):
         "openExpenseCents": expenses,
         "availableAfterExpensesCents": available - expenses,
         "expectedCents": erwartet,
+        "expectedDate": ist_date,
+        "flowsSinceIstCents": flows_after(cashbox_id, ist_date),
         "deviationCents": deviation,
         "writeoffCents": writeoff_total(cashbox_id),
     }
 
 
 def surplus_history(cashbox):
-    balances = list(cashbox_balances(cashbox["id"]).values())
-    soll = sum(balances)
+    """Überschuss je erfasstem Kontostand — jeweils gegen das Soll von diesem Tag."""
     snaps = rows(
         """
         SELECT booked_on, amount_cents FROM account_snapshots
@@ -111,21 +138,12 @@ def surplus_history(cashbox):
         """,
         (cashbox["id"],),
     )
-    history = [
-        {
-            "date": cashbox["opening_date"],
-            "istCents": cashbox["opening_balance_cents"],
-            "surplusCents": cashbox["opening_balance_cents"] - soll,
-        }
-    ]
-    for snap in snaps:
-        history.append(
-            {
-                "date": snap["booked_on"],
-                "istCents": snap["amount_cents"],
-                "surplusCents": snap["amount_cents"] - soll,
-            }
-        )
+    points = [(cashbox["opening_date"], cashbox["opening_balance_cents"])]
+    points += [(snap["booked_on"], snap["amount_cents"]) for snap in snaps]
+    history = []
+    for date, ist in points:
+        soll = soll_on(cashbox["id"], date)
+        history.append({"date": date, "istCents": ist, "sollCents": soll, "surplusCents": ist - soll})
     return history
 
 
