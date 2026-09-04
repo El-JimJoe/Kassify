@@ -208,21 +208,38 @@ function renderNav() {
 }
 
 async function boot() {
-  const health = await api("/health");
-  if (health.setupRequired) {
-    go("setup");
-    return;
-  }
-  if (!state.token) {
-    go("login");
-    return;
-  }
   try {
-    state.me = await api("/me");
-    if (state.me.role !== "admin") state.boxId = state.me.cashboxId;
-    if (state.me.role === "admin" && !state.boxId) go("boxes");
-    else go("home", { boxId: state.boxId });
-  } catch {
+    let health;
+    let lastError;
+    for (let i = 0; i < 10; i++) {
+      try {
+        health = await api("/health");
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
+    if (!health) throw lastError || new Error("Server nicht erreichbar.");
+    if (health.setupRequired) {
+      go("setup");
+      return;
+    }
+    if (!state.token) {
+      go("login");
+      return;
+    }
+    try {
+      state.me = await api("/me");
+      if (state.me.role !== "admin") state.boxId = state.me.cashboxId;
+      if (state.me.role === "admin" && !state.boxId) go("boxes");
+      else go("home", { boxId: state.boxId });
+    } catch {
+      go("login");
+    }
+  } catch (error) {
+    setBanner(error.message || "Server nicht erreichbar.");
     go("login");
   }
 }
@@ -1169,3 +1186,20 @@ async function render() {
 }
 
 boot();
+document.getElementById("login-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const err = form.querySelector("#form-error");
+  const password = new FormData(form).get("password");
+  try {
+    const health = await api("/health");
+    const path = health.setupRequired ? "/setup" : "/login";
+    const res = await api(path, { method: "POST", body: JSON.stringify({ password }) });
+    await afterAuth(res);
+  } catch (error) {
+    if (err) {
+      err.hidden = false;
+      err.textContent = error.message;
+    } else setBanner(error.message);
+  }
+});
