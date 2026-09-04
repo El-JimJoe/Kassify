@@ -162,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/health":
             return {"ok": True, "setupRequired": auth.setup_needed()}
         if method == "POST" and path == "/api/setup":
-            return self.setup()
+            return self.first_setup()
         if method == "POST" and path == "/api/login":
             return self.login()
         if method == "POST" and path == "/api/logout":
@@ -280,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
 
         raise HttpError(404, "Nicht gefunden.")
 
-    def setup(self):
+    def first_setup(self):
         if not auth.setup_needed():
             raise HttpError(400, "Admin-Passwort ist bereits gesetzt.")
         password = str(self.read_json().get("password") or "")
