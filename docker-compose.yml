@@ -10,7 +10,6 @@ services:
       - kassify-data:/data
       # Unraid-Beispiel: - /mnt/user/appdata/kassify:/data
     environment:
-      KASSIFY_PASSWORD: ${KASSIFY_PASSWORD:-}
       KASSIFY_CORS: "*"
 
 volumes:

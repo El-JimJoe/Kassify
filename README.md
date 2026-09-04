@@ -1,42 +1,22 @@
 # Kassify
 
-Kassensystem für den Unraid-Server. Alle Clients öffnen dieselbe Adresse, die Daten liegen in SQLite im Docker-Volume.
+Gemeinschaftskassen für den Unraid-Server. Mehrere Kassen, Mitglieder, Getränke,
+Kontoabgleich, Einkäufe, Sicherung.
 
-## Unraid
-
-Image: `ghcr.io/el-jimjoe/kassify:latest`
-
-- Port: Host `8080` → Container `80`
-- Volume: `/mnt/user/appdata/kassify` → `/data`
-- Restart: unless-stopped
-
-Danach im Browser: `http://UNRAID-IP:8080`
-
-Mit Compose auf Unraid:
-
-```bash
-docker compose up -d
-```
-
-Lokal aus dem Repo bauen:
+## Start
 
 ```bash
 docker compose up --build -d
 ```
 
-### Passwort (optional)
+Browser: `http://UNRAID-IP:8080`
 
-Container-Variable:
+Beim ersten Aufruf ein Admin-Passwort setzen (mindestens 8 Zeichen). Kein
+Standardpasswort.
 
-```
-KASSIFY_PASSWORD=dein-passwort
-```
+Unraid-Volume: `/mnt/user/appdata/kassify` → `/data`
 
-Ohne Variable ist die App im LAN offen.
+## Rollen
 
-## Speicher
-
-- Artikel, Ladenname, MwSt.
-- Abgeschlossene Verkäufe
-
-Der offene Bon bleibt am jeweiligen Gerät, bis er abgeschlossen ist.
+Ein Passwort bestimmt Rolle und Kasse. Admin sieht alle Kassen. Editor und
+Reader landen direkt in ihrer Kasse.

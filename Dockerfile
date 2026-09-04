@@ -5,10 +5,10 @@ RUN apk add --no-cache python3 \
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY web/ /usr/share/nginx/html/
-COPY api/server.py /app/server.py
+COPY api/ /app/
 COPY docker/entrypoint.sh /entrypoint.sh
 
-RUN sed -i 's/\r$//' /entrypoint.sh /app/server.py \
+RUN sed -i 's/\r$//' /entrypoint.sh /app/*.py \
     && chmod +x /entrypoint.sh
 
 VOLUME /data
