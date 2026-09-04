@@ -294,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def login(self):
         ip = self.client_address[0]
+        if auth.setup_needed():
+            raise HttpError(400, "Zuerst ein Admin-Passwort setzen.")
         if auth.throttle(ip):
             auth.record_attempt(ip, False, "throttled")
             raise HttpError(429, "Zu viele Fehlversuche. Bitte warten.")

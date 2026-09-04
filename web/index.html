@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=3" />
+    <link rel="stylesheet" href="./styles.css?v=4" />
   </head>
   <body>
     <div class="app">
@@ -22,7 +22,7 @@
           <span class="mark" aria-hidden="true">K</span>
           <div>
             <h1>Kassify</h1>
-            <p id="subtitle">Anmeldung</p>
+            <p id="subtitle">Ersteinrichtung</p>
           </div>
         </div>
         <div class="topbar-meta" id="top-actions"></div>
@@ -31,10 +31,11 @@
       <nav id="nav" class="nav" hidden></nav>
       <main id="view" class="view">
         <section class="gate" style="max-width:24rem;margin:2rem auto;padding:1.4rem;background:#1c1916;border:1px solid #3b342c;border-radius:20px;color:#f6f0e6;">
-          <h2 style="margin:0 0 1rem;">Anmelden</h2>
+          <h2 style="margin:0 0 1rem;">Admin-Passwort setzen</h2>
           <form id="login-form">
+            <p style="color:#a89988;margin:0 0 1rem;">Noch keine Kasse. Zuerst ein Admin-Passwort wählen, mindestens 8 Zeichen.</p>
             <label style="display:grid;gap:0.4rem;margin:0 0 1rem;">
-              Passwort
+              Neues Passwort
               <input
                 id="password-input"
                 name="password"
@@ -45,12 +46,12 @@
             </label>
             <p class="error" id="form-error" hidden></p>
             <button class="pay" type="submit" style="width:100%;margin-top:0;background:#d4a017;color:#1a1408;border:0;border-radius:14px;padding:0.95rem 1rem;font-weight:600;">
-              Anmelden
+              Einrichten
             </button>
           </form>
         </section>
       </main>
     </div>
-    <script src="./app.js?v=3"></script>
+    <script src="./app.js?v=4"></script>
   </body>
 </html>

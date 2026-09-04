@@ -157,7 +157,7 @@ function renderNav() {
   if (!state.me) {
     nav.hidden = true;
     actions.replaceChildren();
-    subtitle.textContent = "Anmeldung";
+    subtitle.textContent = "Ersteinrichtung";
     return;
   }
   subtitle.textContent = state.me.cashboxName || (isAdmin() ? "Admin" : "Kasse");
@@ -248,6 +248,12 @@ function gate(title, inner) {
   return `<section class="gate"><h2>${title}</h2>${inner}</section>`;
 }
 
+async function submitPassword(password) {
+  const health = await api("/health");
+  const path = health.setupRequired ? "/setup" : "/login";
+  return api(path, { method: "POST", body: JSON.stringify({ password }) });
+}
+
 function renderLogin() {
   view().innerHTML = gate(
     "Kassify",
@@ -258,7 +264,7 @@ function renderLogin() {
     </form>`
   );
   bindForm("login-form", async (data) => {
-    const res = await api("/login", { method: "POST", body: JSON.stringify({ password: data.password }) });
+    const res = await submitPassword(data.password);
     await afterAuth(res);
   });
 }
@@ -266,13 +272,15 @@ function renderLogin() {
 function renderSetup() {
   view().innerHTML = gate(
     "Admin-Passwort setzen",
-    `<form id="setup-form" class="stack">
-      <label class="field">Neues Passwort<input name="password" type="password" minlength="8" /></label>
+    `<p class="hint">Noch keine Kasse. Dieses Passwort merken, mindestens 8 Zeichen.</p>
+    <form id="setup-form" class="stack">
+      <label class="field">Neues Passwort<input name="password" type="password" minlength="8" autocomplete="new-password" /></label>
+      <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Einrichten</button>
     </form>`
   );
   bindForm("setup-form", async (data) => {
-    const res = await api("/setup", { method: "POST", body: JSON.stringify({ password: data.password }) });
+    const res = await submitPassword(data.password);
     await afterAuth(res);
   });
 }
@@ -1192,9 +1200,7 @@ document.getElementById("login-form")?.addEventListener("submit", async (event) 
   const err = form.querySelector("#form-error");
   const password = new FormData(form).get("password");
   try {
-    const health = await api("/health");
-    const path = health.setupRequired ? "/setup" : "/login";
-    const res = await api(path, { method: "POST", body: JSON.stringify({ password }) });
+    const res = await submitPassword(password);
     await afterAuth(res);
   } catch (error) {
     if (err) {
