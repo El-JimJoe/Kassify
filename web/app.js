@@ -1,4 +1,4 @@
-const API_KEY = "kassify-api-base";
+const API_BASE = "/api";
 const TOKEN_KEY = "kassify-token";
 
 const DEFAULTS = {
@@ -41,7 +41,6 @@ const els = {
   settingsForm: document.getElementById("settings-form"),
   shopInput: document.getElementById("shop-input"),
   taxInput: document.getElementById("tax-input"),
-  apiInput: document.getElementById("api-input"),
   productEditor: document.getElementById("product-editor"),
   addProduct: document.getElementById("add-product"),
   settingsCancel: document.getElementById("settings-cancel"),
@@ -56,10 +55,6 @@ const els = {
   passwordInput: document.getElementById("password-input"),
   loginError: document.getElementById("login-error"),
 };
-
-function apiBase() {
-  return (localStorage.getItem(API_KEY) || window.KASSIFY_CONFIG?.apiBase || "/api").replace(/\/$/, "");
-}
 
 function setStatus(text, kind) {
   els.syncStatus.textContent = text;
@@ -85,7 +80,7 @@ async function api(path, options = {}) {
   }
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${apiBase()}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   let payload = {};
   try {
     payload = await res.json();
@@ -131,9 +126,7 @@ async function connect() {
       if (!els.loginDialog.open) els.loginDialog.showModal();
     } else {
       setStatus("Kein Server", "bad");
-      setBanner(
-        "Kein gemeinsamer Speicher. Docker auf Unraid starten und unter Einstellungen die Server-URL setzen (z. B. http://UNRAID-IP:8080/api)."
-      );
+      setBanner("Kassify läuft nicht. Docker-Container auf Unraid starten und die Seite neu laden.");
     }
     renderProducts();
     renderCart();
@@ -357,7 +350,6 @@ els.settingsBtn.addEventListener("click", () => {
   settingsOpen = true;
   els.shopInput.value = state.shopName;
   els.taxInput.value = state.taxRate;
-  els.apiInput.value = apiBase();
   productDraft = structuredClone(state.products);
   renderEditor();
   els.settingsDialog.showModal();
@@ -372,14 +364,6 @@ els.settingsCancel.addEventListener("click", () => {
 });
 els.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const nextBase = els.apiInput.value.trim().replace(/\/$/, "") || "/api";
-  localStorage.setItem(API_KEY, nextBase);
-  if (!connected) {
-    settingsOpen = false;
-    els.settingsDialog.close();
-    await connect();
-    return;
-  }
   state.shopName = els.shopInput.value.trim() || "Kasse";
   state.taxRate = Number(els.taxInput.value || 0);
   state.products = productDraft
@@ -409,8 +393,7 @@ els.settingsForm.addEventListener("submit", async (event) => {
   } catch (error) {
     settingsOpen = false;
     els.settingsDialog.close();
-    if (error.code === 401) connect();
-    else connect();
+    connect();
   }
 });
 

@@ -1,13 +1,14 @@
 services:
   kassify:
     build: .
-    image: kassify:local
+    image: ghcr.io/el-jimjoe/kassify:latest
     container_name: kassify
     ports:
       - "8080:80"
     restart: unless-stopped
     volumes:
       - kassify-data:/data
+      # Unraid-Beispiel: - /mnt/user/appdata/kassify:/data
     environment:
       KASSIFY_PASSWORD: ${KASSIFY_PASSWORD:-}
       KASSIFY_CORS: "*"
