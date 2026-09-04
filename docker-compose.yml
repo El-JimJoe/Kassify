@@ -4,7 +4,7 @@ services:
     image: ghcr.io/el-jimjoe/kassify:latest
     container_name: kassify
     ports:
-      - "8080:80"
+      - "8084:80"
     restart: unless-stopped
     volumes:
       - kassify-data:/data

@@ -157,7 +157,7 @@ function renderNav() {
   if (!state.me) {
     nav.hidden = true;
     actions.replaceChildren();
-    subtitle.textContent = "Gemeinschaftskasse";
+    subtitle.textContent = "Anmeldung";
     return;
   }
   subtitle.textContent = state.me.cashboxName || (isAdmin() ? "Admin" : "Kasse");

@@ -1,22 +1,24 @@
 # Kassify
 
-Gemeinschaftskassen für den Unraid-Server. Mehrere Kassen, Mitglieder, Getränke,
-Kontoabgleich, Einkäufe, Sicherung.
+Gemeinschaftskassen für den Unraid-Server.
 
 ## Start
 
+Im Browser: `http://UNRAID-IP:8084`
+
+Container-Port intern ist **80**. Host-Port ist **8084**.
+
 ```bash
-docker compose up --build -d
+docker pull ghcr.io/el-jimjoe/kassify:latest
+docker stop kassify
+docker rm kassify
+docker run -d --name kassify --restart unless-stopped -p 8084:80 -v /mnt/user/appdata/kassify:/data ghcr.io/el-jimjoe/kassify:latest
 ```
 
-Browser: `http://UNRAID-IP:8080`
+In Unraid bei „Add Container“:
 
-Beim ersten Aufruf ein Admin-Passwort setzen (mindestens 8 Zeichen). Kein
-Standardpasswort.
+- Host Port: `8084`
+- Container Port: `80` (nicht 8084)
+- Volume: `/mnt/user/appdata/kassify` → `/data`
 
-Unraid-Volume: `/mnt/user/appdata/kassify` → `/data`
-
-## Rollen
-
-Ein Passwort bestimmt Rolle und Kasse. Admin sieht alle Kassen. Editor und
-Reader landen direkt in ihrer Kasse.
+Beim ersten Aufruf Admin-Passwort setzen (mindestens 8 Zeichen).

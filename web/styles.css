@@ -35,8 +35,8 @@ input {
 
 .app {
   min-height: 100vh;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
 }
 
 .topbar {
@@ -377,6 +377,27 @@ input {
 
 .view {
   padding: 1.1rem 1.4rem 6rem;
+  flex: 1;
+}
+
+.gate {
+  max-width: 24rem;
+  margin: 2rem auto 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.4rem;
+  box-shadow: var(--shadow);
+}
+
+.gate h2 {
+  font-family: var(--display);
+  margin: 0 0 1rem;
+}
+
+.gate input[type="password"] {
+  min-height: 2.8rem;
+  font-size: 1.1rem;
 }
 
 .nav {
@@ -545,21 +566,6 @@ input {
   padding: 0.9rem 1.4rem 1.2rem;
   background: color-mix(in srgb, var(--surface) 94%, black);
   border-top: 1px solid var(--line);
-}
-
-.gate {
-  max-width: 24rem;
-  margin: 3rem auto 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 1.4rem;
-  box-shadow: var(--shadow);
-}
-
-.gate h2 {
-  font-family: var(--display);
-  margin: 0 0 1rem;
 }
 
 .search {

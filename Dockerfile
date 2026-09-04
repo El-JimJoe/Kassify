@@ -12,11 +12,12 @@ RUN sed -i 's/\r$//' /entrypoint.sh /app/*.py \
     && chmod +x /entrypoint.sh
 
 VOLUME /data
-EXPOSE 80
+EXPOSE 80 8084
 
 ENV KASSIFY_DATA=/data \
     KASSIFY_HOST=127.0.0.1 \
     KASSIFY_PORT=3000 \
-    KASSIFY_CORS=*
+    KASSIFY_CORS=* \
+    PYTHONPATH=/app
 
 ENTRYPOINT ["/entrypoint.sh"]
