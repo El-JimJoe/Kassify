@@ -6,3 +6,11 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
+    volumes:
+      - kassify-data:/data
+    environment:
+      KASSIFY_PASSWORD: ${KASSIFY_PASSWORD:-}
+      KASSIFY_CORS: "*"
+
+volumes:
+  kassify-data:

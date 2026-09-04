@@ -26,11 +26,14 @@
           </div>
         </div>
         <div class="topbar-meta">
+          <span id="sync-status" class="status">Server…</span>
           <time id="clock"></time>
           <button type="button" class="ghost" id="history-btn">Verkäufe</button>
           <button type="button" class="ghost" id="settings-btn">Einstellungen</button>
         </div>
       </header>
+
+      <p id="banner" class="banner" hidden></p>
 
       <main class="stage">
         <section class="catalog" aria-label="Artikel">
@@ -93,6 +96,11 @@
           MwSt. in %
           <input id="tax-input" type="number" min="0" max="100" step="0.1" />
         </label>
+        <label>
+          Server-URL
+          <input id="api-input" type="text" placeholder="/api oder http://192.168.1.10:8080/api" />
+        </label>
+        <p class="hint">GitHub Pages braucht die URL deines Unraid-Containers. Im Docker reicht <code>/api</code>.</p>
         <h3>Artikel</h3>
         <div id="product-editor" class="editor"></div>
         <button type="button" class="ghost" id="add-product">Artikel hinzufügen</button>
@@ -111,6 +119,22 @@
       <ol id="history-list" class="history"></ol>
     </dialog>
 
+    <dialog id="login-dialog" class="sheet">
+      <form id="login-form">
+        <h2>Passwort</h2>
+        <p class="hint">Der Server ist geschützt. Einmal anmelden, dann nutzen alle Geräte denselben Datenbestand.</p>
+        <label>
+          Passwort
+          <input id="password-input" type="password" autocomplete="current-password" />
+        </label>
+        <p id="login-error" class="error" hidden>Passwort stimmt nicht.</p>
+        <div class="actions">
+          <button type="submit" class="pay">Anmelden</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./config.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

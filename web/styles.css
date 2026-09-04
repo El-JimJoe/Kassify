@@ -335,6 +335,46 @@ input {
   border-bottom: 1px solid var(--line);
 }
 
+.status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+}
+
+.status.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--line));
+}
+
+.status.bad {
+  color: #e7a08a;
+  border-color: color-mix(in srgb, var(--rust) 50%, var(--line));
+}
+
+.banner {
+  margin: 0;
+  padding: 0.7rem 1.4rem;
+  background: color-mix(in srgb, var(--rust) 22%, var(--surface));
+  border-bottom: 1px solid var(--line);
+}
+
+.hint,
+.error {
+  color: var(--muted);
+  font-size: 0.92rem;
+  margin: 0.2rem 0 0.6rem;
+}
+
+.error {
+  color: #e7a08a;
+}
+
+.hint code {
+  font-size: 0.85em;
+}
+
 @media (max-width: 900px) {
   .stage {
     grid-template-columns: 1fr;

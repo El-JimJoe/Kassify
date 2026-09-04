@@ -1,20 +1,10 @@
-const STORAGE_KEY = "kassify-v1";
+const API_KEY = "kassify-api-base";
+const TOKEN_KEY = "kassify-token";
 
 const DEFAULTS = {
   shopName: "Kasse",
   taxRate: 19,
-  products: [
-    { id: "kaffee", name: "Kaffee", price: 2.8, emoji: "☕" },
-    { id: "cappuccino", name: "Cappuccino", price: 3.5, emoji: "🧋" },
-    { id: "tee", name: "Tee", price: 2.4, emoji: "🍵" },
-    { id: "croissant", name: "Croissant", price: 2.2, emoji: "🥐" },
-    { id: "broetchen", name: "Brötchen", price: 1.2, emoji: "🥖" },
-    { id: "belegt", name: "Belegtes Brötchen", price: 3.9, emoji: "🥪" },
-    { id: "wasser", name: "Wasser", price: 1.5, emoji: "💧" },
-    { id: "schorle", name: "Apfelschorle", price: 2.5, emoji: "🍏" },
-    { id: "kuchen", name: "Kuchen", price: 3.2, emoji: "🍰" },
-    { id: "snack", name: "Snack", price: 2.0, emoji: "🥨" },
-  ],
+  products: [],
   history: [],
 };
 
@@ -23,9 +13,11 @@ const euro = new Intl.NumberFormat("de-DE", {
   currency: "EUR",
 });
 
-const state = load();
+const state = structuredClone(DEFAULTS);
 const cart = new Map();
 let productDraft = [];
+let connected = false;
+let settingsOpen = false;
 
 const els = {
   shopName: document.getElementById("shop-name"),
@@ -49,6 +41,7 @@ const els = {
   settingsForm: document.getElementById("settings-form"),
   shopInput: document.getElementById("shop-input"),
   taxInput: document.getElementById("tax-input"),
+  apiInput: document.getElementById("api-input"),
   productEditor: document.getElementById("product-editor"),
   addProduct: document.getElementById("add-product"),
   settingsCancel: document.getElementById("settings-cancel"),
@@ -56,28 +49,95 @@ const els = {
   historyDialog: document.getElementById("history-dialog"),
   historyList: document.getElementById("history-list"),
   historyClose: document.getElementById("history-close"),
+  syncStatus: document.getElementById("sync-status"),
+  banner: document.getElementById("banner"),
+  loginDialog: document.getElementById("login-dialog"),
+  loginForm: document.getElementById("login-form"),
+  passwordInput: document.getElementById("password-input"),
+  loginError: document.getElementById("login-error"),
 };
 
-function load() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return structuredClone(DEFAULTS);
-    return { ...structuredClone(DEFAULTS), ...JSON.parse(raw) };
-  } catch {
-    return structuredClone(DEFAULTS);
-  }
+function apiBase() {
+  return (localStorage.getItem(API_KEY) || window.KASSIFY_CONFIG?.apiBase || "/api").replace(/\/$/, "");
 }
 
-function save() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      shopName: state.shopName,
-      taxRate: state.taxRate,
-      products: state.products,
-      history: state.history.slice(0, 50),
-    })
-  );
+function setStatus(text, kind) {
+  els.syncStatus.textContent = text;
+  els.syncStatus.className = `status ${kind || ""}`.trim();
+}
+
+function setBanner(text) {
+  els.banner.hidden = !text;
+  els.banner.textContent = text || "";
+}
+
+function applyServerState(payload) {
+  state.shopName = payload.shopName || "Kasse";
+  state.taxRate = Number(payload.taxRate || 0);
+  state.products = payload.products || [];
+  state.history = payload.history || [];
+}
+
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${apiBase()}${path}`, { ...options, headers });
+  let payload = {};
+  try {
+    payload = await res.json();
+  } catch {
+    payload = {};
+  }
+  if (res.status === 401) {
+    const error = new Error("auth");
+    error.code = 401;
+    throw error;
+  }
+  if (!res.ok) {
+    throw new Error(payload.error || "api");
+  }
+  return payload;
+}
+
+async function connect() {
+  try {
+    const health = await api("/health");
+    if (health.authRequired && !localStorage.getItem(TOKEN_KEY)) {
+      setStatus("Passwort", "bad");
+      setBanner("Der Server verlangt ein Passwort.");
+      if (!els.loginDialog.open) els.loginDialog.showModal();
+      connected = false;
+      renderCart();
+      return;
+    }
+    const data = await api("/data");
+    applyServerState(data);
+    connected = true;
+    setStatus("Server verbunden", "ok");
+    setBanner("");
+    if (els.loginDialog.open) els.loginDialog.close();
+    renderProducts();
+    renderCart();
+  } catch (error) {
+    connected = false;
+    if (error.code === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      setStatus("Passwort", "bad");
+      setBanner("Bitte anmelden, um den gemeinsamen Datenbestand zu nutzen.");
+      if (!els.loginDialog.open) els.loginDialog.showModal();
+    } else {
+      setStatus("Kein Server", "bad");
+      setBanner(
+        "Kein gemeinsamer Speicher. Docker auf Unraid starten und unter Einstellungen die Server-URL setzen (z. B. http://UNRAID-IP:8080/api)."
+      );
+    }
+    renderProducts();
+    renderCart();
+  }
 }
 
 function uid() {
@@ -108,12 +168,20 @@ function tick() {
 }
 
 function renderProducts() {
-  els.products.innerHTML = "";
+  els.products.replaceChildren();
   for (const product of state.products) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "product";
-    button.innerHTML = `<span class="emoji">${product.emoji || "•"}</span><span>${product.name}</span><span class="price">${euro.format(product.price)}</span>`;
+    const emoji = document.createElement("span");
+    emoji.className = "emoji";
+    emoji.textContent = product.emoji || "•";
+    const name = document.createElement("span");
+    name.textContent = product.name;
+    const price = document.createElement("span");
+    price.className = "price";
+    price.textContent = euro.format(product.price);
+    button.append(emoji, name, price);
     button.addEventListener("click", () => addToCart(product.id));
     els.products.appendChild(button);
   }
@@ -121,24 +189,38 @@ function renderProducts() {
 
 function renderCart() {
   const lines = cartLines();
-  els.cart.innerHTML = "";
+  els.cart.replaceChildren();
   if (!lines.length) {
-    els.cart.innerHTML = `<li class="empty">Noch keine Artikel.</li>`;
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = connected ? "Noch keine Artikel." : "Warte auf Serververbindung.";
+    els.cart.appendChild(empty);
   } else {
     for (const line of lines) {
       const item = document.createElement("li");
-      item.innerHTML = `
-        <div>
-          <strong>${line.name}</strong>
-          <div class="muted">${euro.format(line.price)} · ${euro.format(line.price * line.qty)}</div>
-        </div>
-        <div class="qty">
-          <button type="button" data-act="dec" aria-label="Weniger">−</button>
-          <span>${line.qty}</span>
-          <button type="button" data-act="inc" aria-label="Mehr">+</button>
-        </div>`;
-      item.querySelector('[data-act="dec"]').addEventListener("click", () => changeQty(line.id, -1));
-      item.querySelector('[data-act="inc"]').addEventListener("click", () => changeQty(line.id, 1));
+      const info = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = line.name;
+      const meta = document.createElement("div");
+      meta.className = "muted";
+      meta.textContent = `${euro.format(line.price)} · ${euro.format(line.price * line.qty)}`;
+      info.append(title, meta);
+      const qty = document.createElement("div");
+      qty.className = "qty";
+      const dec = document.createElement("button");
+      dec.type = "button";
+      dec.setAttribute("aria-label", "Weniger");
+      dec.textContent = "−";
+      const count = document.createElement("span");
+      count.textContent = String(line.qty);
+      const inc = document.createElement("button");
+      inc.type = "button";
+      inc.setAttribute("aria-label", "Mehr");
+      inc.textContent = "+";
+      dec.addEventListener("click", () => changeQty(line.id, -1));
+      inc.addEventListener("click", () => changeQty(line.id, 1));
+      qty.append(dec, count, inc);
+      item.append(info, qty);
       els.cart.appendChild(item);
     }
   }
@@ -148,11 +230,12 @@ function renderCart() {
   els.tax.textContent = euro.format(tax);
   els.taxLabel.textContent = `${state.taxRate} %`;
   els.total.textContent = euro.format(gross);
-  els.payBtn.disabled = lines.length === 0;
+  els.payBtn.disabled = !connected || lines.length === 0;
   els.shopName.textContent = state.shopName || "Kasse";
 }
 
 function addToCart(id) {
+  if (!connected) return;
   cart.set(id, (cart.get(id) || 0) + 1);
   renderCart();
 }
@@ -177,39 +260,63 @@ function updateChange() {
 }
 
 function renderEditor() {
-  els.productEditor.innerHTML = "";
+  els.productEditor.replaceChildren();
   productDraft.forEach((product, index) => {
     const row = document.createElement("div");
     row.className = "editor-row";
-    row.innerHTML = `
-      <input data-field="emoji" value="${product.emoji || ""}" maxlength="4" aria-label="Symbol" />
-      <input data-field="name" value="${product.name}" aria-label="Name" />
-      <input data-field="price" type="number" min="0" step="0.01" value="${product.price}" aria-label="Preis" />
-      <button type="button" class="ghost" data-del>✕</button>`;
-    row.querySelectorAll("input").forEach((input) => {
+    const emoji = document.createElement("input");
+    emoji.dataset.field = "emoji";
+    emoji.value = product.emoji || "";
+    emoji.maxLength = 4;
+    emoji.setAttribute("aria-label", "Symbol");
+    const name = document.createElement("input");
+    name.dataset.field = "name";
+    name.value = product.name;
+    name.setAttribute("aria-label", "Name");
+    const price = document.createElement("input");
+    price.dataset.field = "price";
+    price.type = "number";
+    price.min = "0";
+    price.step = "0.01";
+    price.value = String(product.price);
+    price.setAttribute("aria-label", "Preis");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "ghost";
+    del.textContent = "✕";
+    [emoji, name, price].forEach((input) => {
       input.addEventListener("input", () => {
         const field = input.dataset.field;
         productDraft[index][field] = field === "price" ? Number(input.value || 0) : input.value;
       });
     });
-    row.querySelector("[data-del]").addEventListener("click", () => {
+    del.addEventListener("click", () => {
       productDraft.splice(index, 1);
       renderEditor();
     });
+    row.append(emoji, name, price, del);
     els.productEditor.appendChild(row);
   });
 }
 
 function renderHistory() {
-  els.historyList.innerHTML = "";
+  els.historyList.replaceChildren();
   if (!state.history.length) {
-    els.historyList.innerHTML = `<li class="empty">Noch keine Verkäufe gespeichert.</li>`;
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Noch keine Verkäufe gespeichert.";
+    els.historyList.appendChild(empty);
     return;
   }
   for (const sale of state.history) {
     const item = document.createElement("li");
-    const names = sale.lines.map((line) => `${line.qty}× ${line.name}`).join(", ");
-    item.innerHTML = `<strong>${euro.format(sale.total)}</strong><div class="muted">${new Date(sale.at).toLocaleString("de-DE")} · ${names}</div>`;
+    const title = document.createElement("strong");
+    title.textContent = euro.format(sale.total);
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    const names = (sale.lines || []).map((line) => `${line.qty}× ${line.name}`).join(", ");
+    meta.textContent = `${new Date(sale.at).toLocaleString("de-DE")} · ${names}`;
+    item.append(title, meta);
     els.historyList.appendChild(item);
   }
 }
@@ -223,22 +330,34 @@ els.payBtn.addEventListener("click", () => {
 });
 els.given.addEventListener("input", updateChange);
 els.payCancel.addEventListener("click", () => els.payDialog.close());
-els.payForm.addEventListener("submit", (event) => {
+els.payForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!connected) return;
   const { gross } = totals();
-  state.history.unshift({
-    at: new Date().toISOString(),
-    total: gross,
-    lines: cartLines().map(({ name, qty, price }) => ({ name, qty, price })),
-  });
-  save();
-  clearCart();
-  els.payDialog.close();
+  try {
+    const data = await api("/sales", {
+      method: "POST",
+      body: JSON.stringify({
+        at: new Date().toISOString(),
+        total: gross,
+        lines: cartLines().map(({ name, qty, price }) => ({ name, qty, price })),
+      }),
+    });
+    applyServerState(data);
+    clearCart();
+    els.payDialog.close();
+    renderProducts();
+  } catch (error) {
+    if (error.code === 401) connect();
+    else setBanner("Verkauf konnte nicht gespeichert werden. Server prüfen.");
+  }
 });
 
 els.settingsBtn.addEventListener("click", () => {
+  settingsOpen = true;
   els.shopInput.value = state.shopName;
   els.taxInput.value = state.taxRate;
+  els.apiInput.value = apiBase();
   productDraft = structuredClone(state.products);
   renderEditor();
   els.settingsDialog.showModal();
@@ -247,9 +366,20 @@ els.addProduct.addEventListener("click", () => {
   productDraft.push({ id: uid(), name: "Neu", price: 1, emoji: "⭐" });
   renderEditor();
 });
-els.settingsCancel.addEventListener("click", () => els.settingsDialog.close());
-els.settingsForm.addEventListener("submit", (event) => {
+els.settingsCancel.addEventListener("click", () => {
+  settingsOpen = false;
+  els.settingsDialog.close();
+});
+els.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const nextBase = els.apiInput.value.trim().replace(/\/$/, "") || "/api";
+  localStorage.setItem(API_KEY, nextBase);
+  if (!connected) {
+    settingsOpen = false;
+    els.settingsDialog.close();
+    await connect();
+    return;
+  }
   state.shopName = els.shopInput.value.trim() || "Kasse";
   state.taxRate = Number(els.taxInput.value || 0);
   state.products = productDraft
@@ -259,19 +389,62 @@ els.settingsForm.addEventListener("submit", (event) => {
       price: Number(product.price || 0),
     }))
     .filter((product) => product.name);
-  save();
-  renderProducts();
-  renderCart();
-  els.settingsDialog.close();
+  try {
+    const data = await api("/data", {
+      method: "PUT",
+      body: JSON.stringify({
+        shopName: state.shopName,
+        taxRate: state.taxRate,
+        products: state.products,
+      }),
+    });
+    applyServerState(data);
+    connected = true;
+    setStatus("Server verbunden", "ok");
+    setBanner("");
+    settingsOpen = false;
+    els.settingsDialog.close();
+    renderProducts();
+    renderCart();
+  } catch (error) {
+    settingsOpen = false;
+    els.settingsDialog.close();
+    if (error.code === 401) connect();
+    else connect();
+  }
 });
 
-els.historyBtn.addEventListener("click", () => {
+els.historyBtn.addEventListener("click", async () => {
+  if (connected) {
+    try {
+      applyServerState(await api("/data"));
+    } catch (error) {
+      if (error.code === 401) connect();
+    }
+  }
   renderHistory();
   els.historyDialog.showModal();
 });
 els.historyClose.addEventListener("click", () => els.historyDialog.close());
 
+els.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const password = els.passwordInput.value;
+  try {
+    await api("/login", { method: "POST", body: JSON.stringify({ password }) });
+    localStorage.setItem(TOKEN_KEY, password);
+    els.loginError.hidden = true;
+    els.passwordInput.value = "";
+    await connect();
+  } catch {
+    els.loginError.hidden = false;
+  }
+});
+
 tick();
 setInterval(tick, 1000);
-renderProducts();
+setInterval(() => {
+  if (connected && !settingsOpen && !els.loginDialog.open) connect();
+}, 15000);
 renderCart();
+connect();

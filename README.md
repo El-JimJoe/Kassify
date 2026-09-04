@@ -1,39 +1,40 @@
 # Kassify
 
-Kassensystem als statische Web-App. Läuft lokal im Browser, auf GitHub Pages und per Docker auf Unraid.
+Kassensystem als Web-App. Die **Daten liegen auf dem Unraid-Server** (SQLite im Docker-Volume), nicht im Browser. Alle Clients sehen denselben Bestand.
 
-## Lokal
+GitHub Pages kann nur die Oberfläche ausliefern. Gemeinsame Daten brauchen den Docker-Container.
 
-`web/index.html` im Browser öffnen.
-
-Oder mit Docker:
-
-```bash
-docker compose up --build
-```
-
-Danach: [http://localhost:8080](http://localhost:8080)
-
-## GitHub Pages
-
-1. Repo auf GitHub anlegen und dieses Projekt pushen.
-2. Unter **Settings → Pages** als Quelle **GitHub Actions** wählen.
-3. Der Workflow `.github/workflows/pages.yml` veröffentlicht den Ordner `web/`.
-
-## Unraid (Docker)
-
-Nach dem ersten Push baut `.github/workflows/docker.yml` ein Image nach `ghcr.io/<user>/kassify:latest`.
-
-Im Unraid-Docker-Tab:
-
-- Repository: `ghcr.io/<dein-github-user>/kassify:latest`
-- Port: Host `8080` → Container `80`
-- Restart: unless-stopped
-
-Lokal bauen geht ebenfalls:
+## Docker / Unraid
 
 ```bash
 docker compose up --build -d
 ```
 
-Artikel, Ladenname und MwSt. werden im Browser in LocalStorage gespeichert.
+App: [http://localhost:8080](http://localhost:8080)
+
+Daten bleiben in Volume `kassify-data` (Pfad im Container: `/data`). Auf Unraid besser ein Host-Pfad mappen, z. B. `/mnt/user/appdata/kassify` → `/data`.
+
+### Passwort (optional, später)
+
+In `.env` oder in den Container-Variablen:
+
+```
+KASSIFY_PASSWORD=dein-passwort
+```
+
+Container neu starten. Die Web-App fragt dann nach dem Passwort. Ohne gesetztes Passwort ist die API im Netz erreichbar – nur im vertrauenswürdigen LAN nutzen.
+
+## GitHub Pages als Oberfläche
+
+1. Pages-Quelle: **GitHub Actions**
+2. Unraid-Container erreichbar machen (LAN-IP, Reverse Proxy oder Tailscale)
+3. In der App unter **Einstellungen → Server-URL** z. B. `http://192.168.1.10:8080/api` eintragen
+
+Ohne diese URL speichert GitHub Pages nichts Gemeinsames.
+
+## Was wird gespeichert?
+
+- Artikel, Ladenname, MwSt.
+- Abgeschlossene Verkäufe
+
+Der aktuelle Bon bleibt am jeweiligen Gerät, bis er abgeschlossen ist.
