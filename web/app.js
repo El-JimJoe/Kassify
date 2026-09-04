@@ -1177,6 +1177,7 @@ async function render() {
       members: renderMembers,
       "member-new": renderMemberNew,
       member: renderMember,
+      drinks: renderDrinks,
       pay: renderPay,
       events: renderEvents,
       account: renderAccount,
