@@ -164,10 +164,14 @@ def _insert(table, data, fields):
 def restore_all(payload):
     """Ersetzt den gesamten Bestand — entweder vollständig oder gar nicht."""
     validate(payload)
+    admin = payload.get("adminAccess")
+    if not (admin or {}).get("password_hash"):
+        # Ohne Admin-Zugang in der Datei waere nach dem Ersetzen niemand mehr
+        # berechtigt, die App zu bedienen.
+        raise ValueError("Die Datei enthält keinen Admin-Zugang. Wiederherstellen würde die App aussperren.")
     conn = db()
     try:
         wipe_all()
-        admin = payload.get("adminAccess")
         if admin:
             _insert(
                 "accesses",

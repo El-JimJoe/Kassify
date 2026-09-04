@@ -33,6 +33,25 @@ input {
   font: inherit;
 }
 
+/* Sichtbarer Tastaturfokus. Ohne das ist die App nur mit der Maus bedienbar. */
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--gold);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+h3 {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 1.05rem;
+  margin: 0.6rem 0 0;
+}
+
 .app {
   min-height: 100vh;
   display: flex;
@@ -128,6 +147,8 @@ input {
 .row {
   display: flex;
   justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+  flex-wrap: wrap;
   margin-bottom: 0.4rem;
   color: var(--muted);
 }
@@ -156,6 +177,12 @@ input {
 .pay:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Unwiderrufliche Aktionen sollen nicht wie der normale Speicherknopf aussehen. */
+.pay.danger {
+  background: var(--rust);
+  color: var(--ink);
 }
 
 .ghost {

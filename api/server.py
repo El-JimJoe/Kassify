@@ -147,7 +147,13 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as err:
+            raise HttpError(400, "Anfrage ist unlesbar.") from err
+        if not isinstance(body, dict):
+            raise HttpError(400, "Anfrage ist unlesbar.")
+        return body
 
     def token(self):
         header = self.headers.get("Authorization") or ""
@@ -334,24 +340,28 @@ class Handler(BaseHTTPRequestHandler):
         ip = self.client_address[0]
         if auth.setup_needed():
             raise HttpError(400, "Zuerst ein Admin-Passwort setzen.")
+        # Auch Fehlversuche gehoeren ins Protokoll, nicht nur in die
+        # Sperrzaehlung: sonst bleibt ein Angriffsversuch unsichtbar.
+        def failed(reason, code, message):
+            auth.record_attempt(ip, False, reason)
+            db.audit(None, "session", ip, "login_failed", "unbekannt", None, {"reason": reason})
+            return HttpError(code, message)
+
         if auth.throttle(ip):
-            auth.record_attempt(ip, False, "throttled")
-            raise HttpError(429, "Zu viele Fehlversuche. Bitte warten.")
+            raise failed("throttled", 429, "Zu viele Fehlversuche. Bitte warten.")
         password = str(self.read_json().get("password") or "")
         matches = auth.find_accesses_for_password(password)
         if not matches:
-            auth.record_attempt(ip, False, "unknown")
-            raise HttpError(401, "Passwort unbekannt.")
+            raise failed("unknown", 401, "Passwort unbekannt.")
         if len(matches) > 1:
-            auth.record_attempt(ip, False, "ambiguous")
-            raise HttpError(
+            raise failed(
+                "ambiguous",
                 409,
                 "Dieses Passwort gehört zu mehreren Zugängen. Der Admin muss es neu vergeben.",
             )
         access = matches[0]
         if not access["enabled"]:
-            auth.record_attempt(ip, False, f"disabled:{access['role']}")
-            raise HttpError(401, "Dieser Zugang ist stillgelegt.")
+            raise failed(f"disabled:{access['role']}", 401, "Dieser Zugang ist stillgelegt.")
         session_id, token = auth.create_session(access["id"])
         auth.record_attempt(ip, True, access["role"])
         db.audit(access["cashbox_id"], "session", session_id, "login", access["role"])
@@ -371,9 +381,20 @@ class Handler(BaseHTTPRequestHandler):
     def me(self):
         ctx = self.context()
         box = db.one("SELECT * FROM cashboxes WHERE id = ?", (ctx["cashbox_id"],)) if ctx["cashbox_id"] else None
-        last_export = db.one(
-            "SELECT created_at FROM audit WHERE action IN ('export','import') ORDER BY id DESC"
-        )
+        # Editor und Reader sehen nur, was ihre eigene Kasse betrifft.
+        if ctx["role"] == "admin":
+            last_export = db.one(
+                "SELECT created_at FROM audit WHERE action IN ('export','import') ORDER BY id DESC"
+            )
+        else:
+            last_export = db.one(
+                """
+                SELECT created_at FROM audit
+                WHERE action IN ('export','import') AND cashbox_id = ?
+                ORDER BY id DESC
+                """,
+                (ctx["cashbox_id"],),
+            )
         return {
             "role": ctx["role"],
             "cashboxId": ctx["cashbox_id"],
@@ -560,41 +581,42 @@ class Handler(BaseHTTPRequestHandler):
         for member in db.rows("SELECT name FROM members WHERE cashbox_id = ?", (cashbox_id,)):
             if name_key(member["name"]) == key:
                 raise HttpError(400, f"„{member['name']}“ gibt es in dieser Kasse schon.")
-        member_id = db.execute(
-            """
-            INSERT INTO members(cashbox_id, name, short_name, note, active, created_at)
-            VALUES(?, ?, ?, ?, 1, ?)
-            """,
-            (
-                cashbox_id,
-                name,
-                str(body.get("shortName") or "").strip(),
-                str(body.get("note") or "").strip(),
-                db.now(),
-            ),
-        )
-        start = int(body.get("startBalanceCents") or 0)
-        if start:
-            # "opening": das Geld steckt schon im Anfangsbestand der Kasse und darf
-            # nicht ein zweites Mal als Zufluss in die Kontrollrechnung eingehen.
-            arrived = body.get("startKind") == "deposit"
-            db.execute(
+        with db.transaction():
+            member_id = db.execute(
                 """
-                INSERT INTO ledger(cashbox_id, member_id, kind, amount_cents, money_cents, booked_on, ref_type, ref_id, note, created_at)
-                VALUES(?, ?, 'start', ?, ?, ?, 'member', ?, ?, ?)
+                INSERT INTO members(cashbox_id, name, short_name, note, active, created_at)
+                VALUES(?, ?, ?, ?, 1, ?)
                 """,
                 (
                     cashbox_id,
-                    member_id,
-                    start,
-                    start if arrived else 0,
-                    as_optional_date(body.get("date"), db.now()[:10]),
-                    member_id,
-                    "Startguthaben · Eingang" if arrived else "Startguthaben · im Anfangsbestand",
+                    name,
+                    str(body.get("shortName") or "").strip(),
+                    str(body.get("note") or "").strip(),
                     db.now(),
                 ),
             )
-        db.audit(cashbox_id, "member", member_id, "create", ctx["role"], None, body)
+            start = int(body.get("startBalanceCents") or 0)
+            if start:
+                # "opening": das Geld steckt schon im Anfangsbestand der Kasse und darf
+                # nicht ein zweites Mal als Zufluss in die Kontrollrechnung eingehen.
+                arrived = body.get("startKind") == "deposit"
+                db.execute(
+                    """
+                    INSERT INTO ledger(cashbox_id, member_id, kind, amount_cents, money_cents, booked_on, ref_type, ref_id, note, created_at)
+                    VALUES(?, ?, 'start', ?, ?, ?, 'member', ?, ?, ?)
+                    """,
+                    (
+                        cashbox_id,
+                        member_id,
+                        start,
+                        start if arrived else 0,
+                        as_optional_date(body.get("date"), db.now()[:10]),
+                        member_id,
+                        "Startguthaben · Eingang" if arrived else "Startguthaben · im Anfangsbestand",
+                        db.now(),
+                    ),
+                )
+            db.audit(cashbox_id, "member", member_id, "create", ctx["role"], None, body)
         return member_payload(db.one("SELECT * FROM members WHERE id = ?", (member_id,)))
 
     def get_member(self, ctx, cashbox_id, member_id):
@@ -775,18 +797,38 @@ class Handler(BaseHTTPRequestHandler):
     def get_drink(self, ctx, cashbox_id, event_id):
         return self.drink_detail(ctx, cashbox_id, event_id)
 
-    def save_revision(self, event_id, role, lines):
+    def save_revision(self, cashbox_id, event_id, role, lines):
+        # Die Mitglieder werden gegen die Kasse geprüft, bevor irgendetwas
+        # geschrieben wird. Ohne diese Prüfung könnte eine selbst gebaute Anfrage
+        # den Saldo eines Mitglieds einer fremden Kasse verändern.
+        checked = []
+        for line in lines or []:
+            if not isinstance(line, dict):
+                raise HttpError(400, "Getränkezeile ist unlesbar.")
+            try:
+                member_id = int(line["memberId"])
+            except (KeyError, TypeError, ValueError) as err:
+                raise HttpError(400, "Getränkezeile ohne Mitglied.") from err
+            try:
+                qty = int(line.get("qty") or 0)
+            except (TypeError, ValueError) as err:
+                raise HttpError(400, "Strichzahl ist keine Zahl.") from err
+            if qty <= 0:
+                continue
+            member = db.one(
+                "SELECT id FROM members WHERE id = ? AND cashbox_id = ?", (member_id, cashbox_id)
+            )
+            if not member:
+                raise HttpError(400, "Mitglied gehört nicht zu dieser Kasse.")
+            checked.append((member_id, qty))
         rev_id = db.execute(
             "INSERT INTO drink_revisions(event_id, created_at, role) VALUES(?, ?, ?)",
             (event_id, db.now(), role),
         )
-        for line in lines:
-            qty = int(line.get("qty") or 0)
-            if qty <= 0:
-                continue
+        for member_id, qty in checked:
             db.execute(
                 "INSERT INTO drink_lines(revision_id, member_id, qty) VALUES(?, ?, ?)",
-                (rev_id, int(line["memberId"]), qty),
+                (rev_id, member_id, qty),
             )
         return rev_id
 
@@ -794,24 +836,25 @@ class Handler(BaseHTTPRequestHandler):
         require_write(ctx)
         box = scoped(ctx, cashbox_id)
         body = self.read_json()
-        event_id = db.execute(
-            """
-            INSERT INTO drink_events(cashbox_id, booked_on, label, status, price_cents, created_at)
-            VALUES(?, ?, ?, 'open', ?, ?)
-            """,
-            (
-                cashbox_id,
-                as_date(body.get("date")),
-                str(body.get("label") or "").strip(),
-                box["drink_price_cents"],
-                db.now(),
-            ),
-        )
-        event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
-        self.save_revision(event_id, ctx["role"], body.get("lines") or [])
-        qtys = current_drink_qtys(event_id)
-        apply_drink_ledger(box, event, qtys, {}, "drink", event["booked_on"])
-        db.audit(cashbox_id, "drink_event", event_id, "create", ctx["role"], None, body)
+        with db.transaction():
+            event_id = db.execute(
+                """
+                INSERT INTO drink_events(cashbox_id, booked_on, label, status, price_cents, created_at)
+                VALUES(?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    cashbox_id,
+                    as_date(body.get("date")),
+                    str(body.get("label") or "").strip(),
+                    box["drink_price_cents"],
+                    db.now(),
+                ),
+            )
+            event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
+            self.save_revision(cashbox_id, event_id, ctx["role"], body.get("lines"))
+            qtys = current_drink_qtys(event_id)
+            apply_drink_ledger(box, event, qtys, {}, "drink", event["booked_on"])
+            db.audit(cashbox_id, "drink_event", event_id, "create", ctx["role"], None, body)
         return self.drink_detail(ctx, cashbox_id, event_id)
 
     def edit_drink(self, ctx, cashbox_id, event_id):
@@ -822,19 +865,20 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(400, "Stornierter Vorgang lässt sich nicht ändern.")
         body = self.read_json()
         previous = current_drink_qtys(event_id)
-        db.execute(
-            "UPDATE drink_events SET booked_on = ?, label = ? WHERE id = ?",
-            (
-                as_optional_date(body.get("date"), detail["booked_on"]),
-                str(body.get("label") or "").strip(),
-                event_id,
-            ),
-        )
-        self.save_revision(event_id, ctx["role"], body.get("lines") or [])
-        qtys = current_drink_qtys(event_id)
-        event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
-        apply_drink_ledger(box, event, qtys, previous, "drink_correction", event["booked_on"])
-        db.audit(cashbox_id, "drink_event", event_id, "update", ctx["role"], previous, qtys)
+        with db.transaction():
+            db.execute(
+                "UPDATE drink_events SET booked_on = ?, label = ? WHERE id = ?",
+                (
+                    as_optional_date(body.get("date"), detail["booked_on"]),
+                    str(body.get("label") or "").strip(),
+                    event_id,
+                ),
+            )
+            self.save_revision(cashbox_id, event_id, ctx["role"], body.get("lines"))
+            qtys = current_drink_qtys(event_id)
+            event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
+            apply_drink_ledger(box, event, qtys, previous, "drink_correction", event["booked_on"])
+            db.audit(cashbox_id, "drink_event", event_id, "update", ctx["role"], previous, qtys)
         return self.drink_detail(ctx, cashbox_id, event_id)
 
     def void_drink(self, ctx, cashbox_id, event_id):
@@ -845,9 +889,10 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(400, "Bereits storniert.")
         previous = current_drink_qtys(event_id)
         event = db.one("SELECT * FROM drink_events WHERE id = ?", (event_id,))
-        apply_drink_ledger(box, event, {}, previous, "drink_void", event["booked_on"])
-        db.execute("UPDATE drink_events SET status = 'voided' WHERE id = ?", (event_id,))
-        db.audit(cashbox_id, "drink_event", event_id, "void", ctx["role"], previous, {})
+        with db.transaction():
+            apply_drink_ledger(box, event, {}, previous, "drink_void", event["booked_on"])
+            db.execute("UPDATE drink_events SET status = 'voided' WHERE id = ?", (event_id,))
+            db.audit(cashbox_id, "drink_event", event_id, "void", ctx["role"], previous, {})
         return self.drink_detail(ctx, cashbox_id, event_id)
 
     def list_snapshots(self, ctx, cashbox_id):
@@ -923,34 +968,35 @@ class Handler(BaseHTTPRequestHandler):
         require_write(ctx)
         scoped(ctx, cashbox_id)
         body = self.read_json()
-        purchase_id = db.execute(
-            """
-            INSERT INTO purchases(cashbox_id, booked_on, vendor, description, receipt_cents, pfand_cents, pfand_given, advanced_by, note, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                cashbox_id,
-                as_date(body.get("date")),
-                str(body.get("vendor") or "").strip(),
-                str(body.get("description") or "").strip(),
-                int(body.get("receiptCents") or 0),
-                int(body.get("pfandCents") or 0),
-                1 if body.get("pfandGiven") else 0,
-                str(body.get("advancedBy") or "").strip(),
-                str(body.get("note") or "").strip(),
-                db.now(),
-            ),
-        )
-        db.audit(cashbox_id, "purchase", purchase_id, "create", ctx["role"], None, body)
-        if body.get("reimburseNow"):
-            self._reimburse(
-                ctx,
-                cashbox_id,
-                purchase_id,
-                int(body.get("reimburseCents") or body.get("receiptCents") or 0),
-                as_optional_date(body.get("reimburseDate"), as_date(body.get("date")), "Erstattungsdatum"),
-                str(body.get("reimburseRef") or "").strip(),
+        with db.transaction():
+            purchase_id = db.execute(
+                """
+                INSERT INTO purchases(cashbox_id, booked_on, vendor, description, receipt_cents, pfand_cents, pfand_given, advanced_by, note, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cashbox_id,
+                    as_date(body.get("date")),
+                    str(body.get("vendor") or "").strip(),
+                    str(body.get("description") or "").strip(),
+                    int(body.get("receiptCents") or 0),
+                    int(body.get("pfandCents") or 0),
+                    1 if body.get("pfandGiven") else 0,
+                    str(body.get("advancedBy") or "").strip(),
+                    str(body.get("note") or "").strip(),
+                    db.now(),
+                ),
             )
+            db.audit(cashbox_id, "purchase", purchase_id, "create", ctx["role"], None, body)
+            if body.get("reimburseNow"):
+                self._reimburse(
+                    ctx,
+                    cashbox_id,
+                    purchase_id,
+                    int(body.get("reimburseCents") or body.get("receiptCents") or 0),
+                    as_optional_date(body.get("reimburseDate"), as_date(body.get("date")), "Erstattungsdatum"),
+                    str(body.get("reimburseRef") or "").strip(),
+                )
         return self.get_purchase(ctx, cashbox_id, purchase_id)
 
     def edit_purchase(self, ctx, cashbox_id, purchase_id):
@@ -1140,6 +1186,17 @@ class Handler(BaseHTTPRequestHandler):
             )
         csv = "\n".join(lines)
         body = csv.encode("utf-8-sig")
+        # Eigene Aktion: ein Auswertungsexport ist keine Sicherung und darf die
+        # Erinnerung an die letzte Sicherung nicht zurueckstellen.
+        db.audit(
+            cashbox_id,
+            "backup",
+            "csv",
+            "export_csv",
+            ctx["role"],
+            None,
+            {"from": start or None, "to": end or None, "rows": len(lines) - 1},
+        )
         self.send_response(200)
         self.cors()
         self.send_header("Content-Type", "text/csv; charset=utf-8")

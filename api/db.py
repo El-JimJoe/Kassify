@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DATA_DIR = os.environ.get("KASSIFY_DATA", "/data")
@@ -181,10 +182,37 @@ def one(query, params=()):
     return dict(r) if r else None
 
 
+_open_transactions = 0
+
+
 def execute(query, params=()):
     cur = db().execute(query, params)
-    db().commit()
+    if not _open_transactions:
+        db().commit()
     return cur.lastrowid
+
+
+@contextmanager
+def transaction():
+    """Fasst mehrere Schreibschritte zu einer Einheit zusammen.
+
+    Normalerweise wird nach jedem Schritt festgeschrieben. Bei einem Vorgang aus
+    mehreren Schritten bliebe dann nach einem Fehler ein halber Zustand zurueck,
+    etwa ein Getraenkevorgang ohne die zugehoerigen Buchungen. Alle Anfragen
+    laufen serialisiert unter `lock`, deshalb genuegt hier ein einfacher Zaehler.
+    """
+    global _open_transactions
+    conn = db()
+    _open_transactions += 1
+    try:
+        yield conn
+    except Exception:
+        _open_transactions = 0
+        conn.rollback()
+        raise
+    _open_transactions -= 1
+    if not _open_transactions:
+        conn.commit()
 
 
 def dump(value):

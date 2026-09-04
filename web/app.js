@@ -35,6 +35,19 @@ function isoToDETime(iso) {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/* Nur echte Web-Adressen werden verlinkt. Ein als Kontolink gespeichertes
+   "javascript:..." waere sonst mit einem Klick ausfuehrbar. */
+function safeUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function parseDE(value) {
   const match = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(value).trim());
   if (!match) return null;
@@ -216,8 +229,8 @@ function renderNav() {
     ["purchases", "Einkäufe"],
     ["reminders", "Mahnliste", canWrite()],
     ["backup", "Sicherung", isAdmin()],
-    ["csv", "CSV", canWrite()],
-    ["manage", "Kasse", isAdmin()],
+    ["csv", "Auswertung", canWrite()],
+    ["manage", "Kassenverwaltung", isAdmin()],
     ["boxes", "Kassen", isAdmin()],
   ].filter((item) => item[2] !== false);
   nav.hidden = false;
@@ -332,7 +345,9 @@ function bindForm(id, handler) {
   const form = document.getElementById(id);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const err = form.querySelector("#form-error, .error");
+    // Enthält das Formular selbst keine Fehlerzeile, die der Seite verwenden.
+    // Auf der Mitgliederseite liegt sie außerhalb der einzelnen Formulare.
+    const err = form.querySelector("#form-error, .error") || view().querySelector("#form-error");
     try {
       await handler(formData(form), form);
     } catch (error) {
@@ -585,7 +600,7 @@ async function renderMember() {
       .map((e) => {
         const tag = e.kind.includes("correction") || e.kind.includes("void") || e.kind === "correction" ? " · Korrektur/Storno" : "";
         return `<li>
-          <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${KIND[e.kind] || e.kind}${tag}</strong><span>${euro(e.amount_cents)}</span></div>
+          <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${KIND[e.kind] || esc(e.kind)}${tag}</strong><span>${euro(e.amount_cents)}</span></div>
           <div class="muted">${esc(e.note || "")} · Saldo ${euro(e.runningCents)}</div>
         </li>`;
       })
@@ -788,7 +803,7 @@ async function renderDrinks() {
     !showIf(
       "drinks",
       `<section>
-    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(price)} / Strich</p></div>
+    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Erfassen"}</h2><p>${euro(price)} / Strich</p></div>
     ${tabs}
     ${tab === "audit" ? auditList(existing.audit) : captureBody}
   </section>`
@@ -895,9 +910,12 @@ async function renderAccount() {
   const data = await api(`/cashboxes/${state.boxId}/snapshots`);
   if (state.view !== "account") return;
   const tab = state.params.tab || "overview";
-  const link = data.account.url
-    ? `<p><a href="${esc(data.account.url)}" target="_blank" rel="noopener">${esc(data.account.name || data.account.url)}</a></p>`
-    : `<p class="muted">${esc(data.account.name || "Kein Konto-Link")}</p>`;
+  const href = safeUrl(data.account.url);
+  const link = href
+    ? `<p><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(data.account.name || href)}</a></p>`
+    : `<p class="muted">${esc(data.account.name || "Kein Konto-Link")}${
+        data.account.url ? " · Der gespeicherte Link ist keine Web-Adresse." : ""
+      }</p>`;
   let body = "";
   if (tab === "audit") body = auditList(data.audit);
   else {
@@ -993,7 +1011,7 @@ function renderPurchaseNew() {
       ${moneyField("Bon-Endbetrag", "receipt")}
       <label class="field"><span><input type="checkbox" name="pfandGiven" /> Pfand abgegeben</span></label>
       ${moneyField("Pfandbetrag", "pfand")}
-      ${field("Vorgestreckt von", "advancedBy", "MasterSven")}
+      ${field("Vorgestreckt von", "advancedBy")}
       ${field("Notiz", "note")}
       <label class="field"><span><input type="checkbox" name="reimburseNow" checked /> Sofort in gleicher Höhe erstatten</span></label>
       ${dateField("Erstattungsdatum", "reimburseDate")}
@@ -1273,7 +1291,7 @@ async function showExportSummary(payload, fileName) {
 
 async function renderCsv() {
   view().innerHTML = `<section class="stack narrow">
-    <h2>Auswertungsexport</h2>
+    <h2>Auswertung</h2>
     <form id="csv-form" class="stack">
       ${dateField("Von", "from")}
       ${dateField("Bis", "to")}
@@ -1329,7 +1347,7 @@ async function renderManage() {
       <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Soll ${euro(box.sollCents)}, Ist ${euro(box.istCents)}. Zuerst Export.</p>
       <button class="ghost" type="button" id="export-before">Export dieser Kasse</button>
       ${field("Vollständigen Kassennamen eintippen", "confirmName")}
-      <button class="pay" type="submit">Unwiderruflich löschen</button>
+      <button class="pay danger" type="submit">Unwiderruflich löschen</button>
     </form>
     <h3>Protokoll</h3>
     ${auditList(audit.audit)}
