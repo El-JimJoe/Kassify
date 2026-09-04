@@ -148,8 +148,7 @@ def restore_all(payload):
     db().commit()
 
 
-def insert_cashbox(box, keep_ids=False, name=None, skip_access_roles=None):
-    skip_access_roles = skip_access_roles or set()
+def insert_cashbox(box, keep_ids=False, name=None):
     old_id = box["id"]
     fields = [
         "name",
@@ -268,17 +267,7 @@ def insert_cashbox(box, keep_ids=False, name=None, skip_access_roles=None):
         _insert("ledger", payload, (["id"] + cols) if keep_ids else cols)
 
     for access in box.get("accesses") or []:
-        if access.get("role") in skip_access_roles:
-            payload = {
-                **access,
-                "cashbox_id": new_id,
-                "password_hash": "",
-                "password_salt": "",
-                "enabled": 0,
-                "created_at": now(),
-            }
-        else:
-            payload = {**access, "cashbox_id": new_id, "created_at": access.get("created_at") or now()}
+        payload = {**access, "cashbox_id": new_id, "created_at": access.get("created_at") or now()}
         _insert(
             "accesses",
             payload,

@@ -165,7 +165,7 @@ function renderNav() {
   if (!state.me) {
     nav.hidden = true;
     actions.replaceChildren();
-    subtitle.textContent = "Ersteinrichtung";
+    subtitle.textContent = state.view === "setup" ? "Ersteinrichtung" : "Anmeldung";
     return;
   }
   subtitle.textContent = state.me.cashboxName || (isAdmin() ? "Admin" : "Kasse");
@@ -333,7 +333,7 @@ async function renderBoxes() {
   if (state.view !== "boxes") return;
   const cards = data.cashboxes
     .map(
-      (box) => `<li><button class="row-btn card" data-id="${box.id}">
+      (box) => `<li><button class="row-btn" data-id="${box.id}">
         <div class="row-split"><strong>${esc(box.name)}</strong><span>${box.memberCount} Mitglieder</span></div>
         <div class="row-split muted"><span>Soll ${euro(box.sollCents)}</span><span>Ist ${euro(box.istCents)}</span></div>
         <div class="row-split"><span>Überschuss</span><strong>${euro(box.surplusCents)}</strong></div>
@@ -685,7 +685,7 @@ async function renderPay() {
       "pay",
       `<section class="stack" style="max-width:32rem">
     <h2>Einzahlung</h2>
-    <input class="field search" id="pay-search" placeholder="Mitglied suchen" />
+    <input class="search" id="pay-search" placeholder="Mitglied suchen" />
     <div id="pay-hits" class="list"></div>
     <form id="pay-form" class="stack" hidden>
       <p id="pay-who"></p>
@@ -708,7 +708,7 @@ async function renderPay() {
     members
       .filter((m) => !q || m.name.toLowerCase().includes(q) || (m.short_name || "").toLowerCase().includes(q))
       .forEach((m) => {
-        const btn = el(`<button class="row-btn card" type="button"><div class="row-split"><strong>${esc(m.name)}</strong><span>${euro(m.balanceCents)}</span></div></button>`);
+        const btn = el(`<button class="row-btn" type="button"><div class="row-split"><strong>${esc(m.name)}</strong><span>${euro(m.balanceCents)}</span></div></button>`);
         btn.addEventListener("click", () => {
           chosen = m;
           document.getElementById("pay-who").textContent = m.name;
@@ -799,7 +799,9 @@ async function renderDrinks() {
   function sum() {
     const qty = Object.values(counts).reduce((s, n) => s + n, 0);
     const people = Object.values(counts).filter((n) => n > 0).length;
-    document.getElementById("drink-sum").textContent = `${qty} Striche = ${euro(qty * price)}, ${people} Personen`;
+    const strokes = qty === 1 ? "1 Strich" : `${qty} Striche`;
+    const heads = people === 1 ? "1 Person" : `${people} Personen`;
+    document.getElementById("drink-sum").textContent = `${strokes} = ${euro(qty * price)}, ${heads}`;
   }
   draw();
   bindForm("drink-form", async (data) => {
@@ -1084,8 +1086,16 @@ async function renderBackup() {
       setBanner("Datei und Betriebsart wählen.");
       return;
     }
-    const backup = JSON.parse(await file.text());
-    const preview = await api("/backup/preview", { method: "POST", body: JSON.stringify({ backup }) });
+    let backup;
+    let preview;
+    try {
+      backup = JSON.parse(await file.text());
+      preview = await api("/backup/preview", { method: "POST", body: JSON.stringify({ backup }) });
+    } catch (error) {
+      document.getElementById("preview").innerHTML = "";
+      setBanner(`Datei lässt sich nicht lesen: ${error.message}`);
+      return;
+    }
     const box = document.getElementById("preview");
     box.innerHTML = `<div class="card stack">
       ${preview.cashboxes.map((c) => `<p>${esc(c.name)} · ${c.memberCount} Mitglieder · Soll ${euro(c.sollCents)} ${c.exists ? "· Name existiert schon" : ""}</p>`).join("")}
@@ -1149,6 +1159,7 @@ async function renderCsv() {
     const res = await fetch(`${API}/backup/csv?cashbox=${state.boxId}&from=${from}&to=${to}`, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
+    if (!res.ok) throw new Error("CSV-Export fehlgeschlagen.");
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

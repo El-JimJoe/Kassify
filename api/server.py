@@ -307,10 +307,17 @@ class Handler(BaseHTTPRequestHandler):
             auth.record_attempt(ip, False, "throttled")
             raise HttpError(429, "Zu viele Fehlversuche. Bitte warten.")
         password = str(self.read_json().get("password") or "")
-        access = auth.find_access_for_password(password)
-        if not access:
+        matches = auth.find_accesses_for_password(password)
+        if not matches:
             auth.record_attempt(ip, False, "unknown")
             raise HttpError(401, "Passwort unbekannt.")
+        if len(matches) > 1:
+            auth.record_attempt(ip, False, "ambiguous")
+            raise HttpError(
+                409,
+                "Dieses Passwort gehört zu mehreren Zugängen. Der Admin muss es neu vergeben.",
+            )
+        access = matches[0]
         if not access["enabled"]:
             auth.record_attempt(ip, False, f"disabled:{access['role']}")
             raise HttpError(401, "Dieser Zugang ist stillgelegt.")
@@ -358,7 +365,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def revoke_one(self):
         ctx = self.context()
-        session_id = int(self.read_json().get("sessionId"))
+        raw = self.read_json().get("sessionId")
+        if raw is None:
+            raise HttpError(400, "Sitzung fehlt.")
+        try:
+            session_id = int(raw)
+        except (TypeError, ValueError) as err:
+            raise HttpError(400, "Sitzung fehlt.") from err
         row = db.one("SELECT * FROM sessions WHERE id = ?", (session_id,))
         if not row or row["access_id"] != ctx["access_id"]:
             raise HttpError(404, "Sitzung nicht gefunden.")
@@ -1032,7 +1045,6 @@ class Handler(BaseHTTPRequestHandler):
             db.audit(None, "backup", "import", "import", "admin", None, {"mode": "restore"})
             return {"ok": True, "summary": backup.summary_from_dump(payload)}
         created = []
-        skipped_passwords = []
         existing_names = {b["name"] for b in db.rows("SELECT name FROM cashboxes")}
         decisions = body.get("nameDecisions") or {}
         for box in payload.get("cashboxes") or []:
@@ -1047,18 +1059,13 @@ class Handler(BaseHTTPRequestHandler):
                     name = str((body.get("newNames") or {}).get(box["name"]) or f"{box['name']} (Import)")
                 else:
                     raise HttpError(400, f"Kasse „{box['name']}“ existiert schon. Überspringen oder umbenennen.")
-            skip_roles = set()
-            for access in box.get("accesses") or []:
-                raw = access.get("_plain")
-                if not raw and access.get("password_hash"):
-                    continue
-            # Password collision: verify imported hashes cannot be checked without plaintext.
-            # Hashes differ per salt; uniqueness is on plaintext. We cannot know collision
-            # from hashes alone. Keep imported hashes; if later set conflicts, setter checks.
-            new_id = backup.insert_cashbox(box, keep_ids=False, name=name, skip_access_roles=skip_roles)
+            # Ob ein Passwort aus der Datei schon vergeben ist, lässt sich aus dem
+            # Hash nicht erkennen. Deshalb greift die Prüfung bei der Anmeldung:
+            # ein mehrfach vergebenes Passwort wird dort abgewiesen.
+            backup.insert_cashbox(box, keep_ids=False, name=name)
             created.append(name)
         db.audit(None, "backup", "import", "import", "admin", None, {"mode": "merge", "created": created})
-        return {"ok": True, "created": created, "passwordWarnings": skipped_passwords, "summary": backup.summary_from_dump(payload)}
+        return {"ok": True, "created": created, "summary": backup.summary_from_dump(payload)}
 
     def csv_export(self, ctx, qs):
         require(ctx, "admin", "editor")

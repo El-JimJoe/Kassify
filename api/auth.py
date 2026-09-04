@@ -79,11 +79,19 @@ def record_attempt(ip, success, note=""):
         _fail_times[ip].append(time.time())
 
 
-def find_access_for_password(password):
-    for access in rows("SELECT * FROM accesses"):
-        if verify_password(password, access["password_hash"], access["password_salt"]):
-            return access
-    return None
+def find_accesses_for_password(password):
+    """Alle Zugänge zu diesem Passwort.
+
+    Normalerweise höchstens einer. Mehrere können nur durch einen Import
+    entstehen, denn beim Setzen wird die Eindeutigkeit geprüft (password_taken).
+    Aus Hashes allein lässt sich eine Dopplung nicht erkennen, hier mit dem
+    Klartext dagegen schon.
+    """
+    return [
+        access
+        for access in rows("SELECT * FROM accesses")
+        if verify_password(password, access["password_hash"], access["password_salt"])
+    ]
 
 
 def create_session(access_id):
