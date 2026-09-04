@@ -101,11 +101,19 @@ async function api(path, options = {}) {
   return payload;
 }
 
+let paintSeq = 0;
+
 function go(name, params = {}) {
   state.view = name;
   state.params = params;
   if (params.boxId) state.boxId = params.boxId;
-  render();
+  render(++paintSeq);
+}
+
+function showIf(name, html) {
+  if (state.view !== name) return false;
+  view().innerHTML = html;
+  return true;
 }
 
 function field(label, name, value, extra = "") {
@@ -255,13 +263,16 @@ async function submitPassword(password) {
 }
 
 function renderLogin() {
-  view().innerHTML = gate(
-    "Kassify",
-    `<form id="login-form" class="stack">
+  showIf(
+    "login",
+    gate(
+      "Kassify",
+      `<form id="login-form" class="stack">
       <label class="field">Passwort<input name="password" type="password" autocomplete="current-password" /></label>
       <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Anmelden</button>
     </form>`
+    )
   );
   bindForm("login-form", async (data) => {
     const res = await submitPassword(data.password);
@@ -270,14 +281,17 @@ function renderLogin() {
 }
 
 function renderSetup() {
-  view().innerHTML = gate(
-    "Admin-Passwort setzen",
-    `<p class="hint">Noch keine Kasse. Dieses Passwort merken, mindestens 8 Zeichen.</p>
+  showIf(
+    "setup",
+    gate(
+      "Admin-Passwort setzen",
+      `<p class="hint">Noch keine Kasse. Dieses Passwort merken, mindestens 8 Zeichen.</p>
     <form id="setup-form" class="stack">
       <label class="field">Neues Passwort<input name="password" type="password" minlength="8" autocomplete="new-password" /></label>
       <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Einrichten</button>
     </form>`
+    )
   );
   bindForm("setup-form", async (data) => {
     const res = await submitPassword(data.password);
@@ -316,6 +330,7 @@ function bindForm(id, handler) {
 
 async function renderBoxes() {
   const data = await api("/cashboxes");
+  if (state.view !== "boxes") return;
   const cards = data.cashboxes
     .map(
       (box) => `<li><button class="row-btn card" data-id="${box.id}">
@@ -325,10 +340,16 @@ async function renderBoxes() {
       </button></li>`
     )
     .join("");
-  view().innerHTML = `<section>
+  if (
+    !showIf(
+      "boxes",
+      `<section>
     <div class="catalog-head"><h2>Kassen</h2>${isAdmin() ? `<button class="ghost" id="new-box">Neue Kasse</button>` : ""}</div>
     <ul class="list">${cards || `<li class="empty">Noch keine Kasse.</li>`}</ul>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   view().querySelectorAll("[data-id]").forEach((btn) =>
     btn.addEventListener("click", () => {
       state.boxId = Number(btn.dataset.id);
@@ -340,7 +361,9 @@ async function renderBoxes() {
 }
 
 function renderBoxNew() {
-  view().innerHTML = `<section class="stack" style="max-width:32rem">
+  showIf(
+    "box-new",
+    `<section class="stack" style="max-width:32rem">
     <h2>Neue Kasse</h2>
     <form id="box-form" class="stack">
       ${field("Bezeichnung", "name")}
@@ -355,7 +378,8 @@ function renderBoxNew() {
       <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Anlegen</button>
     </form>
-  </section>`;
+  </section>`
+  );
   bindForm("box-form", async (data, form) => {
     if (!form.feeFree.checked) throw new Error("Zahlungen mit Gebührenabzug werden in dieser Version nicht unterstützt.");
     const box = await api("/cashboxes", {
@@ -382,13 +406,17 @@ function metricCard(label, cents, warn = false) {
 
 async function renderHome() {
   const box = await api(`/cashboxes/${state.boxId}`);
+  if (state.view !== "home") return;
   state.me.cashboxName = box.name;
   const stale = daysAgo(box.istDate) > 28;
   const backupStale = state.me.lastBackupAt && daysAgo(state.me.lastBackupAt.slice(0, 10)) > 28;
   if (stale) setBanner(`Ist-Kontostand vom ${isoToDE(box.istDate)} — älter als vier Wochen.`);
   else if (isAdmin() && backupStale) setBanner("Letzter Export ist länger her. Sicherung anfertigen.");
   const deviation = box.deviationCents !== 0;
-    view().innerHTML = `<section>
+  if (
+    !showIf(
+      "home",
+      `<section>
     <div class="catalog-head"><h2>${esc(box.name)}</h2><p>${box.memberCount} Mitglieder · ${box.minusCount} im Minus</p></div>
     <div class="metrics">
       ${metricCard("Kassen-Soll", box.sollCents)}
@@ -404,7 +432,10 @@ async function renderHome() {
       ${metricCard("Ausfälle", box.writeoffCents)}
     </div>
     <p><button class="ghost" type="button" id="kick-sessions">Andere Geräte abmelden</button></p>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   document.getElementById("kick-sessions").addEventListener("click", async () => {
     try {
       const data = await api("/sessions");
@@ -428,6 +459,7 @@ function daysAgo(iso) {
 
 async function renderMembers() {
   const data = await api(`/cashboxes/${state.boxId}/members`);
+  if (state.view !== "members") return;
   const minusOnly = state.params.minus;
   let items = data.members;
   if (minusOnly) items = items.filter((m) => m.balanceCents < 0);
@@ -435,7 +467,10 @@ async function renderMembers() {
   const soll = items.reduce((s, m) => s + m.balanceCents, 0);
   const pos = items.reduce((s, m) => s + Math.max(m.balanceCents, 0), 0);
   const neg = items.reduce((s, m) => s + Math.min(m.balanceCents, 0), 0);
-  view().innerHTML = `<section>
+  if (
+    !showIf(
+      "members",
+      `<section>
     <div class="catalog-head">
       <h2>Mitglieder</h2>
       ${canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : ""}
@@ -457,7 +492,10 @@ async function renderMembers() {
         .join("")}
     </ul>
     <div class="row grand"><span>Soll / Verbindlichkeit / Forderung</span><strong>${euro(soll)} · ${euro(pos)} · ${euro(neg)}</strong></div>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   document.getElementById("add-member")?.addEventListener("click", () => go("member-new", { boxId: state.boxId }));
   document.getElementById("filter-minus").addEventListener("click", () => go("members", { boxId: state.boxId, minus: !minusOnly }));
   view().querySelectorAll("[data-id]").forEach((btn) =>
@@ -466,7 +504,9 @@ async function renderMembers() {
 }
 
 function renderMemberNew() {
-  view().innerHTML = `<section class="stack" style="max-width:32rem">
+  showIf(
+    "member-new",
+    `<section class="stack" style="max-width:32rem">
     <h2>Mitglied hinzufügen</h2>
     <form id="member-form" class="stack">
       ${field("Anzeigename", "name")}
@@ -478,7 +518,8 @@ function renderMemberNew() {
       <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Speichern</button>
     </form>
-  </section>`;
+  </section>`
+  );
   bindForm("member-form", async (data) => {
     await api(`/cashboxes/${state.boxId}/members`, {
       method: "POST",
@@ -496,6 +537,7 @@ function renderMemberNew() {
 
 async function renderMember() {
   const member = await api(`/cashboxes/${state.boxId}/members/${state.params.memberId}`);
+  if (state.view !== "member") return;
   const tab = state.params.tab || "overview";
   const minus = member.balanceCents < 0;
   let body = "";
@@ -553,7 +595,10 @@ async function renderMember() {
       }
     </div>`;
   }
-  view().innerHTML = `<section>
+  if (
+    !showIf(
+      "member",
+      `<section>
     <div class="catalog-head"><h2>${esc(member.name)}</h2></div>
     <div class="tabs">
       <button data-tab="overview" class="${tab === "overview" ? "active ghost" : "ghost"}">Übersicht</button>
@@ -562,7 +607,10 @@ async function renderMember() {
     </div>
     ${body}
     <p class="error" id="form-error" hidden></p>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   view().querySelectorAll("[data-tab]").forEach((btn) =>
     btn.addEventListener("click", () => go("member", { boxId: state.boxId, memberId: member.id, tab: btn.dataset.tab }))
   );
@@ -620,7 +668,10 @@ function auditList(items) {
 
 async function renderPay() {
   const members = (await api(`/cashboxes/${state.boxId}/members`)).members.filter((m) => m.active);
-  view().innerHTML = `<section class="stack" style="max-width:32rem">
+  if (
+    !showIf(
+      "pay",
+      `<section class="stack" style="max-width:32rem">
     <h2>Einzahlung</h2>
     <input class="field search" id="pay-search" placeholder="Mitglied suchen" />
     <div id="pay-hits" class="list"></div>
@@ -632,7 +683,10 @@ async function renderPay() {
       <button class="pay" type="submit">Speichern</button>
     </form>
     <p class="error" id="form-error" hidden></p>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   let chosen = null;
   const hits = document.getElementById("pay-hits");
   const form = document.getElementById("pay-form");
@@ -669,9 +723,13 @@ async function renderDrinks() {
   const eventId = state.params.eventId;
   let existing = null;
   if (eventId) existing = await api(`/cashboxes/${state.boxId}/drinks/${eventId}`);
+  if (state.view !== "drinks") return;
   const qtys = {};
   if (existing) existing.lines.forEach((l) => (qtys[l.memberId] = l.qty));
-  view().innerHTML = `<section>
+  if (
+    !showIf(
+      "drinks",
+      `<section>
     <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(box.drink_price_cents)} / Strich</p></div>
     <form id="drink-form">
       ${dateField("Datum", "date", existing?.booked_on)}
@@ -684,7 +742,10 @@ async function renderDrinks() {
         <p class="error" id="form-error" hidden></p>
       </div>
     </form>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   const list = document.getElementById("drink-list");
   const counts = {};
   members.forEach((m) => (counts[m.id] = qtys[m.id] || 0));
@@ -750,6 +811,7 @@ async function renderDrinks() {
 
 async function renderEvents() {
   const data = await api(`/cashboxes/${state.boxId}/drinks`);
+  if (state.view !== "events") return;
   view().innerHTML = `<section>
     <div class="catalog-head"><h2>Vorgänge</h2></div>
     <ul class="list">${
@@ -772,6 +834,7 @@ async function renderEvents() {
 
 async function renderAccount() {
   const data = await api(`/cashboxes/${state.boxId}/snapshots`);
+  if (state.view !== "account") return;
   const tab = state.params.tab || "overview";
   const link = data.account.url
     ? `<p><a href="${esc(data.account.url)}" target="_blank" rel="noopener">${esc(data.account.name || data.account.url)}</a></p>`
@@ -834,6 +897,7 @@ async function renderAccount() {
 async function renderPurchases() {
   if (state.params.purchaseId) return renderPurchaseDetail();
   const data = await api(`/cashboxes/${state.boxId}/purchases`);
+  if (state.view !== "purchases") return;
   const status = { open: "offen", partial: "teilweise", settled: "erstattet" };
   view().innerHTML = `<section>
     <div class="catalog-head"><h2>Einkäufe</h2>${canWrite() ? `<button class="ghost" id="new-buy">Erfassen</button>` : ""}</div>
@@ -898,6 +962,7 @@ function renderPurchaseNew() {
 
 async function renderPurchaseDetail() {
   const p = await api(`/cashboxes/${state.boxId}/purchases/${state.params.purchaseId}`);
+  if (state.view !== "purchases") return;
   const tab = state.params.tab || "overview";
   const eq = p.pfand_given
     ? `<p>Einkaufswert ${euro(p.goodsCents)} − Pfand ${euro(p.pfand_cents)} = Bon-Endbetrag ${euro(p.receipt_cents)}</p>`
@@ -951,6 +1016,7 @@ async function renderPurchaseDetail() {
 
 async function renderReminders() {
   const data = await api(`/cashboxes/${state.boxId}/reminders`);
+  if (state.view !== "reminders") return;
   const text = data.members.map((m) => `${m.name}: ${euro(m.balanceCents)}`).join("\n") || "Keine Minusstände.";
   view().innerHTML = `<section class="stack">
     <div class="catalog-head"><h2>Mahnliste</h2></div>
@@ -1076,6 +1142,7 @@ async function renderManage() {
   const box = await api(`/cashboxes/${state.boxId}`);
   const access = await api(`/cashboxes/${state.boxId}/access`);
   const audit = await api(`/cashboxes/${state.boxId}/audit`);
+  if (state.view !== "manage") return;
   const editor = access.accesses.find((a) => a.role === "editor");
   const reader = access.accesses.find((a) => a.role === "reader");
   view().innerHTML = `<section class="stack" style="max-width:36rem">
@@ -1164,11 +1231,12 @@ async function renderManage() {
   });
 }
 
-async function render() {
+async function render(seq) {
+  const target = state.view;
+  if (seq !== paintSeq) return;
   setBanner("");
   renderNav();
-  try {
-    const map = {
+  const map = {
       login: renderLogin,
       setup: renderSetup,
       boxes: renderBoxes,
@@ -1187,10 +1255,22 @@ async function render() {
       backup: renderBackup,
       csv: renderCsv,
       manage: renderManage,
-    };
-    await (map[state.view] || renderHome)();
+  };
+  const fn = map[target];
+  if (!fn) {
+    if (state.view === target) view().innerHTML = `<p class="error">Seite „${esc(target)}“ wurde nicht gefunden.</p>`;
+    return;
+  }
+  if (target !== "login" && target !== "setup") {
+    if (seq !== paintSeq) return;
+    view().innerHTML = `<p class="muted">Laden …</p>`;
+  }
+  try {
+    await fn();
   } catch (error) {
-    view().innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    if (seq === paintSeq && state.view === target) {
+      view().innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    }
   }
 }
 
