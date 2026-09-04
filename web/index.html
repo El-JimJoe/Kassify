@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#12110f" />
+    <title>Kassify</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">K</span>
+          <div>
+            <h1>Kassify</h1>
+            <p id="shop-name">Kasse</p>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <time id="clock"></time>
+          <button type="button" class="ghost" id="history-btn">Verkäufe</button>
+          <button type="button" class="ghost" id="settings-btn">Einstellungen</button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="catalog" aria-label="Artikel">
+          <div class="catalog-head">
+            <h2>Artikel</h2>
+            <p>Tippen zum Hinzufügen</p>
+          </div>
+          <div id="products" class="products"></div>
+        </section>
+
+        <aside class="ticket" aria-label="Warenkorb">
+          <div class="ticket-head">
+            <h2>Bon</h2>
+            <button type="button" class="text-btn" id="clear-btn">Leeren</button>
+          </div>
+          <ul id="cart" class="cart-list"></ul>
+          <div class="totals">
+            <div class="row">
+              <span>Netto</span>
+              <strong id="net">0,00 €</strong>
+            </div>
+            <div class="row">
+              <span>MwSt. <em id="tax-label">19 %</em></span>
+              <strong id="tax">0,00 €</strong>
+            </div>
+            <div class="row grand">
+              <span>Summe</span>
+              <strong id="total">0,00 €</strong>
+            </div>
+          </div>
+          <button type="button" class="pay" id="pay-btn" disabled>Bezahlen</button>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="pay-dialog" class="sheet">
+      <form method="dialog" id="pay-form">
+        <h2>Zahlung</h2>
+        <p class="due">Zu zahlen: <strong id="due">0,00 €</strong></p>
+        <label>
+          Gegeben
+          <input id="given" type="number" min="0" step="0.01" inputmode="decimal" />
+        </label>
+        <p class="change">Rückgeld: <strong id="change">0,00 €</strong></p>
+        <div class="actions">
+          <button type="submit" class="pay" value="confirm">Bon abschließen</button>
+          <button type="button" class="ghost" id="pay-cancel">Abbrechen</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog" class="sheet wide">
+      <form id="settings-form">
+        <h2>Einstellungen</h2>
+        <label>
+          Ladenname
+          <input id="shop-input" type="text" maxlength="40" />
+        </label>
+        <label>
+          MwSt. in %
+          <input id="tax-input" type="number" min="0" max="100" step="0.1" />
+        </label>
+        <h3>Artikel</h3>
+        <div id="product-editor" class="editor"></div>
+        <button type="button" class="ghost" id="add-product">Artikel hinzufügen</button>
+        <div class="actions">
+          <button type="submit" class="pay">Speichern</button>
+          <button type="button" class="ghost" id="settings-cancel">Schließen</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="history-dialog" class="sheet wide">
+      <div class="history-head">
+        <h2>Letzte Verkäufe</h2>
+        <button type="button" class="ghost" id="history-close">Schließen</button>
+      </div>
+      <ol id="history-list" class="history"></ol>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+services:
+  kassify:
+    build: .
+    image: kassify:local
+    container_name: kassify
+    ports:
+      - "8080:80"
+    restart: unless-stopped
