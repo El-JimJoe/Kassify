@@ -326,6 +326,12 @@ input {
   gap: 0.7rem;
 }
 
+/* Formularseiten bleiben schmal, damit Eingabefelder am Rechner nicht
+   über die ganze Bildschirmbreite laufen. */
+.narrow {
+  max-width: 34rem;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;
@@ -345,6 +351,17 @@ input {
 
 .field textarea {
   min-height: 4.5rem;
+}
+
+/* Der Knopf im Dateifeld kommt sonst in den hellen Standardfarben des Browsers. */
+.field input[type="file"]::file-selector-button {
+  margin-right: 0.7rem;
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
 }
 
 .tabs {
@@ -451,6 +468,12 @@ input {
 
   .topbar,
   .topbar-meta {
+    flex-wrap: wrap;
+  }
+
+  /* Passen die beiden Hälften einer Zeile nicht nebeneinander, rutscht die
+     rechte darunter statt sich zu quetschen. */
+  .row-split {
     flex-wrap: wrap;
   }
 }

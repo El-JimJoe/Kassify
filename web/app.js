@@ -25,6 +25,16 @@ function isoToDE(iso) {
   return `${d}.${m}.${y}`;
 }
 
+/* Protokolleinträge tragen einen Zeitstempel in UTC. Für die Anzeige zählt die
+   Ortszeit samt Uhrzeit, sonst sind mehrere Änderungen am selben Tag nicht
+   auseinanderzuhalten. */
+function isoToDETime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return isoToDE(iso);
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function parseDE(value) {
   const match = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(value).trim());
   if (!match) return null;
@@ -91,7 +101,11 @@ async function api(path, options = {}) {
   }
   if (res.status === 401) {
     if (state.view !== "login" && state.view !== "setup") {
+      // Auch die Rolle vergessen, sonst bleibt die Navigationsleiste der Kasse
+      // über der Anmeldemaske stehen.
       state.token = "";
+      state.me = null;
+      state.boxId = null;
       localStorage.removeItem(TOKEN_KEY);
       go("login");
     }
@@ -157,6 +171,8 @@ const KIND = {
   drink_void: "Getränk · Storno",
   reimbursement: "Erstattung",
 };
+
+const PURCHASE_STATUS = { open: "offen", partial: "teilweise", settled: "erstattet" };
 
 function renderNav() {
   const nav = document.getElementById("nav");
@@ -363,7 +379,7 @@ async function renderBoxes() {
 function renderBoxNew() {
   showIf(
     "box-new",
-    `<section class="stack" style="max-width:32rem">
+    `<section class="stack narrow">
     <h2>Neue Kasse</h2>
     <form id="box-form" class="stack">
       ${field("Bezeichnung", "name")}
@@ -466,9 +482,13 @@ async function renderMembers() {
   const data = await api(`/cashboxes/${state.boxId}/members`);
   if (state.view !== "members") return;
   const minusOnly = state.params.minus;
+  const sort = state.params.sort || "name";
   let items = data.members;
   if (minusOnly) items = items.filter((m) => m.balanceCents < 0);
-  items.sort((a, b) => a.name.localeCompare(b.name, "de"));
+  const byName = (a, b) => a.name.localeCompare(b.name, "de");
+  // Beim Sortieren nach Guthaben zuerst die tiefsten Minusstände, damit
+  // offene Forderungen oben stehen. Gleichstand nach Name.
+  items.sort(sort === "balance" ? (a, b) => a.balanceCents - b.balanceCents || byName(a, b) : byName);
   const soll = items.reduce((s, m) => s + m.balanceCents, 0);
   const pos = items.reduce((s, m) => s + Math.max(m.balanceCents, 0), 0);
   const neg = items.reduce((s, m) => s + Math.min(m.balanceCents, 0), 0);
@@ -480,7 +500,9 @@ async function renderMembers() {
       <h2>Mitglieder</h2>
       ${canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : ""}
     </div>
-    <div class="stack">
+    <div class="tabs">
+      <button class="${sort === "name" ? "active ghost" : "ghost"}" data-sort="name">Name</button>
+      <button class="${sort === "balance" ? "active ghost" : "ghost"}" data-sort="balance">Guthaben</button>
       <button class="ghost" id="filter-minus">${minusOnly ? "Alle zeigen" : "Nur Minusstände"}</button>
     </div>
     <ul class="list" id="member-list">
@@ -502,7 +524,12 @@ async function renderMembers() {
   )
     return;
   document.getElementById("add-member")?.addEventListener("click", () => go("member-new", { boxId: state.boxId }));
-  document.getElementById("filter-minus").addEventListener("click", () => go("members", { boxId: state.boxId, minus: !minusOnly }));
+  document
+    .getElementById("filter-minus")
+    .addEventListener("click", () => go("members", { boxId: state.boxId, minus: !minusOnly, sort }));
+  view().querySelectorAll("[data-sort]").forEach((btn) =>
+    btn.addEventListener("click", () => go("members", { boxId: state.boxId, minus: minusOnly, sort: btn.dataset.sort }))
+  );
   view().querySelectorAll("[data-id]").forEach((btn) =>
     btn.addEventListener("click", () => go("member", { boxId: state.boxId, memberId: Number(btn.dataset.id) }))
   );
@@ -511,7 +538,7 @@ async function renderMembers() {
 function renderMemberNew() {
   showIf(
     "member-new",
-    `<section class="stack" style="max-width:32rem">
+    `<section class="stack narrow">
     <h2>Mitglied hinzufügen</h2>
     <form id="member-form" class="stack">
       ${field("Anzeigename", "name")}
@@ -671,7 +698,7 @@ function auditList(items) {
   if (!items?.length) return `<p class="empty">Keine Einträge.</p>`;
   return `<ul class="list">${items
     .map((e) => `<li>
-      <div class="row-split"><strong>${isoToDE(e.created_at)} · ${esc(e.role)} · ${esc(e.action)}</strong></div>
+      <div class="row-split"><strong>${isoToDETime(e.created_at)} · ${esc(e.role)} · ${esc(e.action)}</strong></div>
       <div class="muted">vorher: ${esc(e.before_json || "—")}</div>
       <div class="muted">nachher: ${esc(e.after_json || "—")}</div>
     </li>`)
@@ -683,7 +710,7 @@ async function renderPay() {
   if (
     !showIf(
       "pay",
-      `<section class="stack" style="max-width:32rem">
+      `<section class="stack narrow">
     <h2>Einzahlung</h2>
     <input class="search" id="pay-search" placeholder="Mitglied suchen" />
     <div id="pay-hits" class="list"></div>
@@ -739,12 +766,14 @@ async function renderDrinks() {
   const qtys = {};
   if (existing) existing.lines.forEach((l) => (qtys[l.memberId] = l.qty));
   const price = existing ? existing.priceCents : box.drink_price_cents;
-  if (
-    !showIf(
-      "drinks",
-      `<section>
-    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(price)} / Strich</p></div>
-    <form id="drink-form">
+  const tab = existing ? state.params.tab || "capture" : "capture";
+  const tabs = existing
+    ? `<div class="tabs">
+        <button data-tab="capture" class="${tab === "capture" ? "active ghost" : "ghost"}">Erfassung</button>
+        <button data-tab="audit" class="${tab === "audit" ? "active ghost" : "ghost"}">Protokoll</button>
+      </div>`
+    : "";
+  const captureBody = `<form id="drink-form">
       ${dateField("Datum", "date", existing?.booked_on)}
       ${field("Bezeichnung", "label", existing?.label || "", `placeholder="z. B. Treffen"`)}
       <div id="drink-list"></div>
@@ -754,11 +783,26 @@ async function renderDrinks() {
         ${existing && canWrite() ? `<button class="ghost" type="button" id="void-event">Stornieren</button>` : ""}
         <p class="error" id="form-error" hidden></p>
       </div>
-    </form>
+    </form>`;
+  if (
+    !showIf(
+      "drinks",
+      `<section>
+    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Getränke"}</h2><p>${euro(price)} / Strich</p></div>
+    ${tabs}
+    ${tab === "audit" ? auditList(existing.audit) : captureBody}
   </section>`
     )
   )
     return;
+  view()
+    .querySelectorAll("[data-tab]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () =>
+        go("drinks", { boxId: state.boxId, eventId, tab: btn.dataset.tab })
+      )
+    );
+  if (tab === "audit") return;
   const list = document.getElementById("drink-list");
   const counts = {};
   members.forEach((m) => (counts[m.id] = qtys[m.id] || 0));
@@ -920,14 +964,13 @@ async function renderPurchases() {
   if (state.params.purchaseId) return renderPurchaseDetail();
   const data = await api(`/cashboxes/${state.boxId}/purchases`);
   if (state.view !== "purchases") return;
-  const status = { open: "offen", partial: "teilweise", settled: "erstattet" };
   view().innerHTML = `<section>
     <div class="catalog-head"><h2>Einkäufe</h2>${canWrite() ? `<button class="ghost" id="new-buy">Erfassen</button>` : ""}</div>
     <ul class="list">${
       data.purchases
         .map(
           (p) => `<li><button class="row-btn" data-id="${p.id}">
-            <div class="row-split"><strong>${isoToDE(p.booked_on)} · ${esc(p.vendor)}</strong><span class="badge">${status[p.status]}</span></div>
+            <div class="row-split"><strong>${isoToDE(p.booked_on)} · ${esc(p.vendor)}</strong><span class="badge">${PURCHASE_STATUS[p.status] || p.status}</span></div>
             <div class="row-split muted"><span>${esc(p.description)}</span><span>${euro(p.receipt_cents)} · Rest ${euro(p.restCents)}</span></div>
           </button></li>`
         )
@@ -941,7 +984,7 @@ async function renderPurchases() {
 }
 
 function renderPurchaseNew() {
-  view().innerHTML = `<section class="stack" style="max-width:32rem">
+  view().innerHTML = `<section class="stack narrow">
     <h2>Einkauf</h2>
     <form id="buy-form" class="stack">
       ${dateField("Datum", "date")}
@@ -989,12 +1032,26 @@ async function renderPurchaseDetail() {
   const eq = p.pfand_given
     ? `<p>Einkaufswert ${euro(p.goodsCents)} − Pfand ${euro(p.pfand_cents)} = Bon-Endbetrag ${euro(p.receipt_cents)}</p>`
     : `<p>Bon-Endbetrag ${euro(p.receipt_cents)}</p>`;
+  const editBody = `<form id="buy-edit-form" class="stack">
+      ${dateField("Datum", "date", p.booked_on)}
+      ${field("Händler", "vendor", p.vendor)}
+      ${field("Was", "description", p.description)}
+      ${moneyField("Bon-Endbetrag", "receipt", p.receipt_cents)}
+      <label class="field"><span><input type="checkbox" name="pfandGiven" ${p.pfand_given ? "checked" : ""} /> Pfand abgegeben</span></label>
+      ${moneyField("Pfandbetrag", "pfand", p.pfand_cents)}
+      ${field("Vorgestreckt von", "advancedBy", p.advanced_by)}
+      ${field("Notiz", "note", p.note)}
+      <p class="hint">Bereits gebuchte Erstattungen bleiben unverändert. Der Rest wird neu berechnet.</p>
+      <button class="pay" type="submit">Änderung speichern</button>
+    </form>`;
   let body =
     tab === "audit"
       ? auditList(p.audit)
+      : tab === "edit"
+      ? editBody
       : `${eq}
         <p class="muted">${esc(p.vendor)} · ${esc(p.description)} · ${esc(p.advanced_by)}</p>
-        <p>Status: ${p.status} · Rest ${euro(p.restCents)}</p>
+        <p>Status: ${PURCHASE_STATUS[p.status] || p.status} · Rest ${euro(p.restCents)}</p>
         ${
           canWrite() && p.restCents > 0
             ? `<form id="payback-form" class="stack">
@@ -1006,33 +1063,55 @@ async function renderPurchaseDetail() {
             : ""
         }
         <ul class="list">${p.reimbursements.map((r) => `<li class="row-split"><span>${isoToDE(r.booked_on)} ${esc(r.reference)}</span><strong>${euro(r.amount_cents)}</strong></li>`).join("")}</ul>`;
-  view().innerHTML = `<section>
+  if (
+    !showIf(
+      "purchases",
+      `<section>
     <div class="catalog-head"><h2>Einkauf ${isoToDE(p.booked_on)}</h2></div>
     <div class="tabs">
-      <button class="ghost ${tab === "overview" ? "active" : ""}" data-tab="overview">Übersicht</button>
-      <button class="ghost ${tab === "audit" ? "active" : ""}" data-tab="audit">Protokoll</button>
+      <button class="${tab === "overview" ? "active ghost" : "ghost"}" data-tab="overview">Übersicht</button>
+      ${canWrite() ? `<button class="${tab === "edit" ? "active ghost" : "ghost"}" data-tab="edit">Bearbeiten</button>` : ""}
+      <button class="${tab === "audit" ? "active ghost" : "ghost"}" data-tab="audit">Protokoll</button>
     </div>
     ${body}
     <p class="error" id="form-error" hidden></p>
-  </section>`;
+  </section>`
+    )
+  )
+    return;
   view().querySelectorAll("[data-tab]").forEach((btn) =>
     btn.addEventListener("click", () => go("purchases", { boxId: state.boxId, purchaseId: p.id, tab: btn.dataset.tab }))
   );
-  if (tab === "overview") {
-    const form = document.getElementById("payback-form");
-    if (form) {
-      bindForm("payback-form", async (data) => {
-        await api(`/cashboxes/${state.boxId}/purchases/${p.id}/reimburse`, {
-          method: "POST",
-          body: JSON.stringify({
-            amountCents: parseEuro(data.amount),
-            date: requireDate(data.date),
-            reference: data.reference,
-          }),
-        });
-        go("purchases", { boxId: state.boxId, purchaseId: p.id });
+  if (tab === "overview" && document.getElementById("payback-form")) {
+    bindForm("payback-form", async (data) => {
+      await api(`/cashboxes/${state.boxId}/purchases/${p.id}/reimburse`, {
+        method: "POST",
+        body: JSON.stringify({
+          amountCents: parseEuro(data.amount),
+          date: requireDate(data.date),
+          reference: data.reference,
+        }),
       });
-    }
+      go("purchases", { boxId: state.boxId, purchaseId: p.id });
+    });
+  }
+  if (tab === "edit") {
+    bindForm("buy-edit-form", async (data, form) => {
+      await api(`/cashboxes/${state.boxId}/purchases/${p.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          date: requireDate(data.date),
+          vendor: data.vendor,
+          description: data.description,
+          receiptCents: parseEuro(data.receipt),
+          pfandGiven: form.pfandGiven.checked,
+          pfandCents: parseEuro(data.pfand),
+          advancedBy: data.advancedBy,
+          note: data.note,
+        }),
+      });
+      go("purchases", { boxId: state.boxId, purchaseId: p.id });
+    });
   }
 }
 
@@ -1057,11 +1136,12 @@ async function renderReminders() {
 }
 
 async function renderBackup() {
-  view().innerHTML = `<section class="stack" style="max-width:36rem">
+  view().innerHTML = `<section class="stack narrow">
     <h2>Sicherung</h2>
     <p class="hint">Die Datei enthält Klarnamen, Salden und Zugänge. Nicht in Cloud, Chat oder Git legen. Passwörter stehen nicht im Klartext, ein Import in eine andere Instanz gibt aber vollen Zugriff.</p>
     <button class="pay" id="export-all" type="button">Gesamtexport</button>
-    <button class="ghost" id="export-one" type="button">Diese Kasse exportieren</button>
+    ${state.boxId ? `<button class="ghost" id="export-one" type="button">Diese Kasse exportieren</button>` : ""}
+    <div id="export-summary"></div>
     <form id="import-form" class="stack">
       <h3>Import</h3>
       <label class="field">Datei<input type="file" name="file" accept="application/json" /></label>
@@ -1076,8 +1156,18 @@ async function renderBackup() {
     </form>
     <div id="preview"></div>
   </section>`;
-  document.getElementById("export-all").addEventListener("click", () => downloadExport(""));
-  document.getElementById("export-one").addEventListener("click", () => downloadExport(`?cashbox=${state.boxId}`));
+  const runExport = async (query, label) => {
+    try {
+      const payload = await downloadExport(query);
+      await showExportSummary(payload, label);
+    } catch (error) {
+      setBanner(error.message);
+    }
+  };
+  document.getElementById("export-all").addEventListener("click", () => runExport("", "Gesamtexport"));
+  document
+    .getElementById("export-one")
+    ?.addEventListener("click", () => runExport(`?cashbox=${state.boxId}`, "Export dieser Kasse"));
   document.getElementById("import-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const file = event.target.file.files[0];
@@ -1090,10 +1180,16 @@ async function renderBackup() {
     let preview;
     try {
       backup = JSON.parse(await file.text());
+    } catch {
+      document.getElementById("preview").innerHTML = "";
+      setBanner("Die Datei ist beschädigt und lässt sich nicht lesen. Bitte die unveränderte Sicherungsdatei wählen.");
+      return;
+    }
+    try {
       preview = await api("/backup/preview", { method: "POST", body: JSON.stringify({ backup }) });
     } catch (error) {
       document.getElementById("preview").innerHTML = "";
-      setBanner(`Datei lässt sich nicht lesen: ${error.message}`);
+      setBanner(error.message);
       return;
     }
     const box = document.getElementById("preview");
@@ -1134,18 +1230,49 @@ async function renderBackup() {
 async function downloadExport(query) {
   const res = await fetch(`${API}/backup/export${query}`, { headers: { Authorization: `Bearer ${state.token}` } });
   if (!res.ok) throw new Error("Export fehlgeschlagen.");
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
+  const text = await res.text();
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
   const a = document.createElement("a");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   a.href = url;
   a.download = `kassify-${stamp}.json`;
   a.click();
   URL.revokeObjectURL(url);
+  return JSON.parse(text);
+}
+
+/* Nachweis, dass die Datei vollständig ist: was steckt wirklich drin? */
+async function showExportSummary(payload, fileName) {
+  const target = document.getElementById("export-summary");
+  if (!target) return;
+  target.innerHTML = `<p class="muted">Zusammenfassung wird erstellt …</p>`;
+  try {
+    const data = await api("/backup/preview", { method: "POST", body: JSON.stringify({ backup: payload }) });
+    const boxes = data.cashboxes || [];
+    const total = (key) => boxes.reduce((sum, c) => sum + (c[key] || 0), 0);
+    if (!document.getElementById("export-summary")) return;
+    target.innerHTML = `<div class="card stack">
+      <strong>Gesichert: ${fileName}</strong>
+      <p class="muted">${boxes.length} ${boxes.length === 1 ? "Kasse" : "Kassen"} · ${total("memberCount")} Mitglieder · ${total("bookingCount")} Buchungen</p>
+      <ul class="list">
+        ${boxes
+          .map(
+            (c) => `<li>
+              <div class="row-split"><strong>${esc(c.name)}</strong><span>${c.memberCount} Mitglieder</span></div>
+              <div class="row-split muted"><span>${c.bookingCount} Buchungen</span><span>Soll ${euro(c.sollCents)} · Ist ${euro(c.istCents)}</span></div>
+            </li>`
+          )
+          .join("")}
+      </ul>
+      <p class="hint">Diese Zahlen mit der Kassenübersicht vergleichen. Weichen sie ab, ist die Datei unvollständig.</p>
+    </div>`;
+  } catch (error) {
+    target.innerHTML = `<p class="error">Die Datei wurde heruntergeladen, die Zusammenfassung ließ sich aber nicht erstellen: ${esc(error.message)}</p>`;
+  }
 }
 
 async function renderCsv() {
-  view().innerHTML = `<section class="stack" style="max-width:32rem">
+  view().innerHTML = `<section class="stack narrow">
     <h2>Auswertungsexport</h2>
     <form id="csv-form" class="stack">
       ${dateField("Von", "from")}
@@ -1176,7 +1303,7 @@ async function renderManage() {
   if (state.view !== "manage") return;
   const editor = access.accesses.find((a) => a.role === "editor");
   const reader = access.accesses.find((a) => a.role === "reader");
-  view().innerHTML = `<section class="stack" style="max-width:36rem">
+  view().innerHTML = `<section class="stack narrow">
     <h2>Kassenverwaltung</h2>
     <form id="box-edit" class="stack">
       ${field("Bezeichnung", "name", box.name)}

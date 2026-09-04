@@ -3,6 +3,7 @@ import json
 import os
 import re
 import traceback
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -30,6 +31,36 @@ def require(ctx, *roles):
 def require_write(ctx):
     if ctx["role"] == "reader":
         raise HttpError(403, "Nur Leserecht.")
+
+
+def as_date(value, label="Datum"):
+    """Nimmt ein Datum als JJJJ-MM-TT an und weist alles andere ab.
+
+    Datumswerte steuern die Kontrollrechnung: Buchungen zählen nur, wenn sie
+    nach dem Anfangsbestand und bis zum Stichtag liegen. Ein unbemerkt falsch
+    geschriebenes Datum würde Soll und Ist dauerhaft gegeneinander verschieben.
+    """
+    text = str(value or "").strip()
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError as err:
+        raise HttpError(400, f"{label} als JJJJ-MM-TT angeben.") from err
+
+
+def as_optional_date(value, fallback, label="Datum"):
+    if value in (None, ""):
+        return fallback
+    return as_date(value, label)
+
+
+def required_text(body, key, fallback, label):
+    """Pflichtfeld beim Ändern: nicht mitgeschickt heißt unverändert, leer ist ein Fehler."""
+    if key not in body:
+        return str(fallback or "").strip()
+    text = str(body[key] or "").strip()
+    if not text:
+        raise HttpError(400, f"{label} darf nicht leer sein.")
+    return text
 
 
 def scoped(ctx, cashbox_id):
@@ -404,7 +435,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(body.get("accountName") or "").strip(),
                 str(body.get("accountUrl") or "").strip(),
                 int(body.get("openingBalanceCents") or 0),
-                str(body.get("openingDate") or ""),
+                as_date(body.get("openingDate"), "Datum des Anfangsbestands"),
                 str(body.get("openingSource") or "").strip(),
                 db.now(),
             ),
@@ -431,7 +462,9 @@ class Handler(BaseHTTPRequestHandler):
             "account_name": str(body.get("accountName") or box["account_name"]).strip(),
             "account_url": str(body.get("accountUrl") or box["account_url"]).strip(),
             "opening_balance_cents": int(body.get("openingBalanceCents") if "openingBalanceCents" in body else box["opening_balance_cents"]),
-            "opening_date": str(body.get("openingDate") or box["opening_date"]),
+            "opening_date": as_optional_date(
+                body.get("openingDate"), box["opening_date"], "Datum des Anfangsbestands"
+            ),
             "opening_source": str(body.get("openingSource") or box["opening_source"]).strip(),
         }
         db.execute(
@@ -555,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
                     member_id,
                     start,
                     start if arrived else 0,
-                    str(body.get("date") or db.now()[:10]),
+                    as_optional_date(body.get("date"), db.now()[:10]),
                     member_id,
                     "Startguthaben · Eingang" if arrived else "Startguthaben · im Anfangsbestand",
                     db.now(),
@@ -636,7 +669,7 @@ class Handler(BaseHTTPRequestHandler):
         amount = int(body.get("amountCents") or 0)
         if amount <= 0:
             raise HttpError(400, "Betrag muss größer als 0 sein.")
-        booked_on = str(body.get("date") or "")
+        booked_on = as_date(body.get("date"))
         note = str(body.get("note") or "").strip()
         money = amount if kind == "deposit" else -amount
         delta = amount if kind == "deposit" else -amount
@@ -673,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
             INSERT INTO ledger(cashbox_id, member_id, kind, amount_cents, money_cents, booked_on, ref_type, ref_id, note, created_at)
             VALUES(?, ?, 'correction', ?, 0, ?, 'member', ?, ?, ?)
             """,
-            (cashbox_id, member_id, amount, str(body.get("date") or ""), member_id, note, db.now()),
+            (cashbox_id, member_id, amount, as_date(body.get("date")), member_id, note, db.now()),
         )
         db.audit(cashbox_id, "member", member_id, "correction", ctx["role"], {"balanceCents": member["balanceCents"]}, body)
         return self.get_member(ctx, cashbox_id, member_id)
@@ -686,7 +719,7 @@ class Handler(BaseHTTPRequestHandler):
         balance = member["balanceCents"]
         if balance == 0:
             raise HttpError(400, "Saldo ist schon 0,00 €.")
-        booked_on = str(body.get("date") or "")
+        booked_on = as_date(body.get("date"))
         if reason == "payout" and balance > 0:
             kind, delta, money, note = "payout", -balance, -balance, "Saldo ausgleichen · Auszahlung"
         elif reason == "deposit" and balance < 0:
@@ -768,7 +801,7 @@ class Handler(BaseHTTPRequestHandler):
             """,
             (
                 cashbox_id,
-                str(body.get("date") or ""),
+                as_date(body.get("date")),
                 str(body.get("label") or "").strip(),
                 box["drink_price_cents"],
                 db.now(),
@@ -791,7 +824,11 @@ class Handler(BaseHTTPRequestHandler):
         previous = current_drink_qtys(event_id)
         db.execute(
             "UPDATE drink_events SET booked_on = ?, label = ? WHERE id = ?",
-            (str(body.get("date") or detail["booked_on"]), str(body.get("label") or "").strip(), event_id),
+            (
+                as_optional_date(body.get("date"), detail["booked_on"]),
+                str(body.get("label") or "").strip(),
+                event_id,
+            ),
         )
         self.save_revision(event_id, ctx["role"], body.get("lines") or [])
         qtys = current_drink_qtys(event_id)
@@ -846,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
             """,
             (
                 cashbox_id,
-                str(body.get("date") or ""),
+                as_date(body.get("date")),
                 int(body.get("amountCents") or 0),
                 str(body.get("source") or "").strip(),
                 str(body.get("note") or "").strip(),
@@ -893,7 +930,7 @@ class Handler(BaseHTTPRequestHandler):
             """,
             (
                 cashbox_id,
-                str(body.get("date") or ""),
+                as_date(body.get("date")),
                 str(body.get("vendor") or "").strip(),
                 str(body.get("description") or "").strip(),
                 int(body.get("receiptCents") or 0),
@@ -911,7 +948,7 @@ class Handler(BaseHTTPRequestHandler):
                 cashbox_id,
                 purchase_id,
                 int(body.get("reimburseCents") or body.get("receiptCents") or 0),
-                str(body.get("reimburseDate") or body.get("date") or ""),
+                as_optional_date(body.get("reimburseDate"), as_date(body.get("date")), "Erstattungsdatum"),
                 str(body.get("reimburseRef") or "").strip(),
             )
         return self.get_purchase(ctx, cashbox_id, purchase_id)
@@ -927,14 +964,15 @@ class Handler(BaseHTTPRequestHandler):
             WHERE id=?
             """,
             (
-                str(body.get("date") or before["booked_on"]),
-                str(body.get("vendor") or before["vendor"]).strip(),
-                str(body.get("description") or before["description"]).strip(),
+                as_optional_date(body.get("date"), before["booked_on"]),
+                required_text(body, "vendor", before["vendor"], "Händler"),
+                required_text(body, "description", before["description"], "Was"),
                 int(body.get("receiptCents") if "receiptCents" in body else before["receipt_cents"]),
                 int(body.get("pfandCents") if "pfandCents" in body else before["pfand_cents"]),
                 1 if body.get("pfandGiven", before["pfand_given"]) else 0,
-                str(body.get("advancedBy") or before["advanced_by"]).strip(),
-                str(body.get("note") or before["note"]).strip(),
+                # Notiz und "vorgestreckt von" dürfen bewusst geleert werden.
+                str(body["advancedBy"] if "advancedBy" in body else before["advanced_by"] or "").strip(),
+                str(body["note"] if "note" in body else before["note"] or "").strip(),
                 purchase_id,
             ),
         )
@@ -970,7 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
             cashbox_id,
             purchase_id,
             int(body.get("amountCents") or 0),
-            str(body.get("date") or ""),
+            as_date(body.get("date")),
             str(body.get("reference") or "").strip(),
         )
         return self.get_purchase(ctx, cashbox_id, purchase_id)
@@ -1014,8 +1052,10 @@ class Handler(BaseHTTPRequestHandler):
         require(ctx, "admin")
         body = self.read_json()
         payload = body.get("backup") or body
-        if payload.get("format") != "kassify-backup":
-            raise HttpError(400, "Datei ist kein Kassify-Export.")
+        try:
+            backup.validate(payload)
+        except ValueError as err:
+            raise HttpError(400, str(err)) from err
         existing = {b["name"] for b in db.rows("SELECT name FROM cashboxes")}
         names = []
         for box in payload.get("cashboxes") or []:
@@ -1035,8 +1075,10 @@ class Handler(BaseHTTPRequestHandler):
         mode = body.get("mode")
         if mode not in ("restore", "merge"):
             raise HttpError(400, "Bitte Wiederherstellen oder Ergänzen ausdrücklich wählen.")
-        if payload.get("format") != "kassify-backup":
-            raise HttpError(400, "Datei ist kein Kassify-Export.")
+        try:
+            backup.validate(payload)
+        except ValueError as err:
+            raise HttpError(400, str(err)) from err
         selected = set(body.get("selectedNames") or [b["name"] for b in payload.get("cashboxes") or []])
         if mode == "restore":
             if str(body.get("confirmWord") or "") != "WIEDERHERSTELLEN":
@@ -1044,9 +1086,9 @@ class Handler(BaseHTTPRequestHandler):
             backup.restore_all(payload)
             db.audit(None, "backup", "import", "import", "admin", None, {"mode": "restore"})
             return {"ok": True, "summary": backup.summary_from_dump(payload)}
-        created = []
         existing_names = {b["name"] for b in db.rows("SELECT name FROM cashboxes")}
         decisions = body.get("nameDecisions") or {}
+        planned = []
         for box in payload.get("cashboxes") or []:
             name = box.get("name")
             if name not in selected:
@@ -1062,8 +1104,8 @@ class Handler(BaseHTTPRequestHandler):
             # Ob ein Passwort aus der Datei schon vergeben ist, lässt sich aus dem
             # Hash nicht erkennen. Deshalb greift die Prüfung bei der Anmeldung:
             # ein mehrfach vergebenes Passwort wird dort abgewiesen.
-            backup.insert_cashbox(box, keep_ids=False, name=name)
-            created.append(name)
+            planned.append((box, name))
+        created = backup.merge_cashboxes(planned)
         db.audit(None, "backup", "import", "import", "admin", None, {"mode": "merge", "created": created})
         return {"ok": True, "created": created, "summary": backup.summary_from_dump(payload)}
 

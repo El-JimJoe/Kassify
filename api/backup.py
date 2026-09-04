@@ -87,6 +87,51 @@ def summary_from_dump(payload):
     return out
 
 
+def validate(payload):
+    """Prüft die Datei, bevor irgendetwas geschrieben wird.
+
+    Ein Import, der auf halber Strecke merkt, dass die Datei unbrauchbar ist,
+    hinterlässt sonst einen Mischbestand oder — beim Wiederherstellen — gar nichts.
+    """
+    if not isinstance(payload, dict) or payload.get("format") != "kassify-backup":
+        raise ValueError("Datei ist kein Kassify-Export.")
+    boxes = payload.get("cashboxes")
+    if not isinstance(boxes, list) or not boxes:
+        raise ValueError("Die Datei enthält keine Kasse.")
+    for index, box in enumerate(boxes, start=1):
+        where = f"Kasse {index}"
+        if not isinstance(box, dict):
+            raise ValueError(f"{where}: Eintrag ist unlesbar.")
+        name = box.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{where}: Bezeichnung fehlt.")
+        where = f"Kasse „{name}“"
+        if box.get("id") is None:
+            raise ValueError(f"{where}: Kennung fehlt.")
+        for field in ("drink_price_cents", "opening_balance_cents"):
+            if not isinstance(box.get(field), int):
+                raise ValueError(f"{where}: {field} ist kein ganzzahliger Centbetrag.")
+        for key in ("members", "ledger", "snapshots", "drinkEvents", "purchases", "accesses"):
+            if not isinstance(box.get(key) or [], list):
+                raise ValueError(f"{where}: Abschnitt {key} ist unlesbar.")
+        for member in box.get("members") or []:
+            if not isinstance(member, dict) or member.get("id") is None:
+                raise ValueError(f"{where}: Mitglied ohne Kennung.")
+            if not str(member.get("name") or "").strip():
+                raise ValueError(f"{where}: Mitglied ohne Name.")
+        member_ids = {m.get("id") for m in box.get("members") or []}
+        for entry in box.get("ledger") or []:
+            for field in ("amount_cents", "money_cents"):
+                if not isinstance(entry.get(field), int):
+                    raise ValueError(f"{where}: Buchung mit unlesbarem Betrag ({field}).")
+            member_id = entry.get("member_id")
+            if member_id is not None and member_id not in member_ids:
+                raise ValueError(f"{where}: Buchung verweist auf ein unbekanntes Mitglied.")
+        for purchase in box.get("purchases") or []:
+            if not isinstance(purchase.get("receipt_cents"), int):
+                raise ValueError(f"{where}: Einkauf mit unlesbarem Bon-Endbetrag.")
+
+
 def wipe_all():
     tables = [
         "drink_lines",
@@ -106,7 +151,6 @@ def wipe_all():
     conn = db()
     for table in tables:
         conn.execute(f"DELETE FROM {table}")
-    conn.commit()
 
 
 def _insert(table, data, fields):
@@ -118,34 +162,56 @@ def _insert(table, data, fields):
 
 
 def restore_all(payload):
-    wipe_all()
-    admin = payload.get("adminAccess")
-    if admin:
-        _insert(
-            "accesses",
-            {**admin, "cashbox_id": None, "role": "admin", "created_at": now()},
-            ["cashbox_id", "role", "password_hash", "password_salt", "enabled", "created_at"],
-        )
-    for box in payload.get("cashboxes") or []:
-        insert_cashbox(box, keep_ids=True)
-    for entry in payload.get("globalAudit") or []:
-        _insert(
-            "audit",
-            entry,
-            [
-                "id",
-                "cashbox_id",
-                "object_type",
-                "object_id",
-                "action",
-                "role",
-                "before_json",
-                "after_json",
-                "note",
-                "created_at",
-            ],
-        )
-    db().commit()
+    """Ersetzt den gesamten Bestand — entweder vollständig oder gar nicht."""
+    validate(payload)
+    conn = db()
+    try:
+        wipe_all()
+        admin = payload.get("adminAccess")
+        if admin:
+            _insert(
+                "accesses",
+                {**admin, "cashbox_id": None, "role": "admin", "created_at": now()},
+                ["cashbox_id", "role", "password_hash", "password_salt", "enabled", "created_at"],
+            )
+        for box in payload.get("cashboxes") or []:
+            insert_cashbox(box, keep_ids=True)
+        for entry in payload.get("globalAudit") or []:
+            _insert(
+                "audit",
+                entry,
+                [
+                    "id",
+                    "cashbox_id",
+                    "object_type",
+                    "object_id",
+                    "action",
+                    "role",
+                    "before_json",
+                    "after_json",
+                    "note",
+                    "created_at",
+                ],
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def merge_cashboxes(boxes_with_names):
+    """Legt Kassen zusätzlich an — entweder alle oder keine."""
+    conn = db()
+    created = []
+    try:
+        for box, name in boxes_with_names:
+            insert_cashbox(box, keep_ids=False, name=name)
+            created.append(name)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return created
 
 
 def insert_cashbox(box, keep_ids=False, name=None):
@@ -289,5 +355,5 @@ def insert_cashbox(box, keep_ids=False, name=None):
         ]
         _insert("audit", payload, (["id"] + cols) if keep_ids else cols)
 
-    db().commit()
+    # Kein commit: der Aufrufer schließt die gesamte Einspielung als eine Einheit ab.
     return new_id
