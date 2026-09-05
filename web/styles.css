@@ -41,6 +41,12 @@
   box-sizing: border-box;
 }
 
+html {
+  /* Platz fuer die Scrollbar immer freihalten, sonst rutscht die mittige Seite
+     beim Wechsel zwischen kurzen und langen Tabs um einige Pixel. */
+  scrollbar-gutter: stable;
+}
+
 html,
 body {
   margin: 0;
@@ -192,17 +198,9 @@ strong {
   gap: var(--gap-lg);
 }
 
-/* Formularseiten bleiben schmal und mittig, damit Eingabefelder am Rechner
-   nicht ueber die ganze Seitenbreite laufen. Gehoert an den Abschnitt selbst,
-   damit Titel, Untertabs und Felder dieselbe linke Kante haben. */
-.narrow {
-  width: 100%;
-  max-width: 36rem;
-  margin-inline: auto;
-}
-
-/* Ein schmales Formular auf einer breiten Seite. Bleibt an der linken Kante,
-   sonst stuende es versetzt unter der Seitenueberschrift. */
+/* Jede Seite ist gleich breit. Nur Eingabefelder werden begrenzt, damit sie am
+   Rechner nicht ueber die ganze Seitenbreite laufen. Der Block bleibt an der
+   linken Kante, sonst stuende er versetzt unter der Seitenueberschrift. */
 .form-block {
   max-width: 36rem;
 }

@@ -425,9 +425,9 @@ async function renderBoxes() {
 function renderBoxNew() {
   showIf(
     "box-new",
-    `<section class="page narrow">
+    `<section class="page">
     ${pageHead("Neue Kasse")}
-    <form id="box-form" class="stack">
+    <form id="box-form" class="stack form-block">
       ${field("Bezeichnung", "name")}
       ${moneyField("Getränkepreis", "drinkPrice", 100)}
       ${field("Kontobezeichnung", "accountName")}
@@ -639,9 +639,9 @@ async function renderMembers() {
 function renderMemberNew() {
   showIf(
     "member-new",
-    `<section class="page narrow">
+    `<section class="page">
     ${pageHead("Mitglied hinzufügen")}
-    <form id="member-form" class="stack">
+    <form id="member-form" class="stack form-block">
       ${field("Anzeigename", "name")}
       ${field("Kürzel", "shortName")}
       ${field("Notiz", "note")}
@@ -1022,10 +1022,10 @@ async function renderPay() {
   if (
     !showIf(
       "pay",
-      `<section class="page narrow">
+      `<section class="page">
     ${pageHead("Einzahlung")}
     ${payTabs("deposit")}
-    <form id="pay-form" class="stack" hidden>
+    <form id="pay-form" class="stack form-block" hidden>
       <p id="pay-who"></p>
       ${moneyField("Betrag", "amount")}
       ${dateField("Datum", "date")}
@@ -1033,9 +1033,9 @@ async function renderPay() {
       <button class="pay" type="submit">Speichern</button>
       <p class="error" id="form-error" hidden></p>
     </form>
+    <h3>Mitglied wählen</h3>
     <div class="stack">
-      <h3>Mitglied wählen</h3>
-      <input class="search" id="pay-search" placeholder="Mitglied suchen" aria-label="Mitglied suchen" />
+      <input class="search form-block" id="pay-search" placeholder="Mitglied suchen" aria-label="Mitglied suchen" />
       <ul id="pay-hits" class="list"></ul>
       <p class="muted" id="pay-more" hidden></p>
     </div>
@@ -1106,7 +1106,7 @@ async function renderPayLog() {
   if (
     !showIf(
       "pay",
-      `<section class="page narrow">
+      `<section class="page">
     ${pageHead("Einzahlung")}
     ${payTabs("log")}
     ${
@@ -1499,9 +1499,9 @@ async function renderPurchases() {
 }
 
 function renderPurchaseNew() {
-  view().innerHTML = `<section class="page narrow">
+  view().innerHTML = `<section class="page">
     ${pageHead("Einkauf erfassen")}
-    <form id="buy-form" class="stack">
+    <form id="buy-form" class="stack form-block">
       ${dateField("Datum", "date")}
       ${field("Händler", "vendor")}
       ${field("Was", "description")}
@@ -1651,10 +1651,12 @@ async function renderReminders() {
   const data = await api(`/cashboxes/${state.boxId}/reminders`);
   if (state.view !== "reminders") return;
   const text = data.members.map((m) => `${m.name}: ${euro(m.balanceCents)}`).join("\n") || "Keine Minusstände.";
-  view().innerHTML = `<section class="page narrow">
+  view().innerHTML = `<section class="page">
     ${pageHead("Mahnliste", `<p>${data.members.length} im Minus</p>`)}
-    <textarea class="copy-box" id="copy-text" readonly>${esc(text)}</textarea>
-    <button class="pay" id="copy-btn" type="button">Liste kopieren</button>
+    <div class="stack form-block">
+      <textarea class="copy-box" id="copy-text" readonly>${esc(text)}</textarea>
+      <button class="pay" id="copy-btn" type="button">Liste kopieren</button>
+    </div>
   </section>`;
   document.getElementById("copy-btn").addEventListener("click", async () => {
     const value = document.getElementById("copy-text").value;
@@ -1668,16 +1670,16 @@ async function renderReminders() {
 }
 
 async function renderBackup() {
-  view().innerHTML = `<section class="page narrow">
+  view().innerHTML = `<section class="page">
     ${pageHead("Sicherung")}
-    <div class="stack">
+    <div class="stack form-block">
       <h3>Export</h3>
       <p class="hint">Die Datei enthält Klarnamen, Salden und Zugänge. Nicht in Cloud, Chat oder Git legen. Passwörter stehen nicht im Klartext, ein Import in eine andere Instanz gibt aber vollen Zugriff.</p>
       <button class="pay" id="export-all" type="button">Gesamtexport</button>
       ${state.boxId ? `<button class="ghost" id="export-one" type="button">Diese Kasse exportieren</button>` : ""}
     </div>
     <div id="export-summary"></div>
-    <form id="import-form" class="stack">
+    <form id="import-form" class="stack form-block">
       <h3>Import</h3>
       <label class="field">Datei<input type="file" name="file" accept="application/json" /></label>
       <label class="field">Betriebsart
@@ -1809,9 +1811,9 @@ async function showExportSummary(payload, fileName) {
 }
 
 async function renderCsv() {
-  view().innerHTML = `<section class="page narrow">
+  view().innerHTML = `<section class="page">
     ${pageHead("Auswertung")}
-    <form id="csv-form" class="stack">
+    <form id="csv-form" class="stack form-block">
       <p class="hint">Alle Buchungen des gewählten Zeitraums als CSV-Datei, etwa für die Jahresabrechnung.</p>
       ${dateField("Von", "from")}
       ${dateField("Bis", "to")}
@@ -1846,7 +1848,7 @@ async function renderManage() {
   const editor = access.accesses.find((a) => a.role === "editor");
   const reader = access.accesses.find((a) => a.role === "reader");
   const settings = `<div class="page">
-    <form id="box-edit" class="stack">
+    <form id="box-edit" class="stack form-block">
       <h3>Stammdaten</h3>
       ${field("Bezeichnung", "name", box.name)}
       ${moneyField("Getränkepreis", "drinkPrice", box.drink_price_cents)}
@@ -1858,7 +1860,7 @@ async function renderManage() {
       ${checkField("Zahlungen gebührenfrei", "feeFree", true)}
       <button class="pay" type="submit">Speichern</button>
     </form>
-    <form id="role-form" class="stack">
+    <form id="role-form" class="stack form-block">
       <h3>Zugänge</h3>
       ${field("Editor-Passwort", "editorPassword", "", `type="password"`)}
       ${checkField("Editor aktiv", "editorOn", editor?.enabled)}
@@ -1866,7 +1868,7 @@ async function renderManage() {
       ${checkField("Reader aktiv", "readerOn", reader?.enabled)}
       <button class="ghost" type="submit">Zugänge speichern</button>
     </form>
-    <form id="del-form" class="stack">
+    <form id="del-form" class="stack form-block">
       <h3>Kasse löschen</h3>
       <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Kassen-Soll ${euro(
     box.sollCents
@@ -1876,7 +1878,7 @@ async function renderManage() {
       <button class="pay danger" type="submit">Unwiderruflich löschen</button>
     </form>
   </div>`;
-  view().innerHTML = `<section class="page narrow">
+  view().innerHTML = `<section class="page">
     ${pageHead("Kassenverwaltung")}
     ${tabBar(
       [
