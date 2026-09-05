@@ -3,18 +3,31 @@
      die Auswahllisten von <select> kommen sonst in Hellgrau daher. */
   color-scheme: dark;
 
-  --bg: #12110f;
-  --surface: #1c1916;
-  --surface-2: #27221d;
-  --ink: #f6f0e6;
-  --muted: #a89988;
-  --line: #3b342c;
-  --gold: #d4a017;
-  --gold-ink: #1a1408;
-  --rust: #c45c26;
-  --ok: #8fbe7a;
-  --bad: #e7a08a;
-  --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  /* Die fuenf Farben der Palette. Alles andere ist daraus abgeleitet. */
+  --background: #050a0a;
+  --text: #ebf2f4;
+  --primary: #9ccfdd;
+  --secondary: #21697d;
+  --accent: #3bb6d8;
+
+  /* Flaechen und Linien: der Grund mit steigendem Anteil Sekundaerfarbe. */
+  --surface: #0a1a1e;
+  --surface-2: #102a31;
+  --line: #17414d;
+
+  /* Nebentext: die Schriftfarbe in Richtung Sekundaerfarbe gezogen. */
+  --muted: #92adb5;
+
+  /* Schrift auf Akzent- und Warnflaechen. Fast schwarz mit einem Hauch Blau. */
+  --accent-ink: #041519;
+
+  /* Signalfarben. Gruen und Koralle liegen weit genug vom Blau der Palette,
+     damit Guthaben, Schulden und Warnungen nicht verwechselt werden. */
+  --ok: #6ecf99;
+  --bad: #f4a294;
+  --warn: #e2694f;
+
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
 
   /* Der Inhalt bleibt auf Seitenbreite und mittig. Trennlinien und Farbbaender
      laufen trotzdem ueber die ganze Breite: sie tragen nur diesen Innenabstand,
@@ -56,8 +69,12 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: radial-gradient(1200px 700px at 10% -10%, #2a2319 0%, var(--bg) 55%);
-  color: var(--ink);
+  background: radial-gradient(
+    1200px 700px at 10% -10%,
+    color-mix(in srgb, var(--secondary) 40%, var(--background)) 0%,
+    var(--background) 55%
+  );
+  color: var(--text);
   font-family: var(--font);
 }
 
@@ -77,12 +94,14 @@ textarea {
 
 /* Sichtbarer Tastaturfokus. Ohne das ist die App nur mit der Maus bedienbar. */
 :focus-visible {
-  outline: 2px solid var(--gold);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
+/* Links tragen die helle Primaerfarbe. Der Akzent bleibt den Knoepfen, sonst
+   sieht im Text jeder Link wie eine Schaltflaeche aus. */
 a {
-  color: var(--gold);
+  color: var(--primary);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
@@ -156,8 +175,8 @@ strong {
   display: grid;
   place-items: center;
   border-radius: var(--radius-sm);
-  background: var(--gold);
-  color: var(--gold-ink);
+  background: var(--accent);
+  color: var(--accent-ink);
   font-family: var(--display);
   font-weight: 650;
 }
@@ -171,7 +190,7 @@ strong {
 .banner {
   margin: 0;
   padding: 0.7rem var(--pad-inline);
-  background: color-mix(in srgb, var(--rust) 22%, var(--surface));
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface));
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-small);
 }
@@ -243,8 +262,8 @@ strong {
 }
 
 .inline-field select {
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--background);
+  color: var(--text);
   font-family: inherit;
   /* Gleiche Schriftgroesse wie die Pillenknoepfe daneben. */
   font-size: 1rem;
@@ -267,7 +286,7 @@ strong {
 }
 
 .ghost {
-  color: var(--ink);
+  color: var(--text);
 }
 
 /* Die Hauptnavigation traegt elf Punkte. Etwas kompakter passt sie am Rechner
@@ -279,14 +298,14 @@ strong {
 
 .nav button.active,
 .tabs button.active {
-  color: var(--gold-ink);
-  background: var(--gold);
-  border-color: var(--gold);
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .ghost.danger {
-  color: var(--rust);
-  border-color: var(--rust);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 .tabs {
@@ -321,8 +340,8 @@ strong {
 
 .pay {
   width: 100%;
-  background: var(--gold);
-  color: var(--gold-ink);
+  background: var(--accent);
+  color: var(--accent-ink);
   border: 0;
   border-radius: 14px;
   padding: 0.9rem 1rem;
@@ -337,8 +356,8 @@ strong {
 
 /* Unwiderrufliche Aktionen sollen nicht wie der normale Speicherknopf aussehen. */
 .pay.danger {
-  background: var(--rust);
-  color: var(--ink);
+  background: var(--warn);
+  color: var(--accent-ink);
 }
 
 .gate {
@@ -387,7 +406,7 @@ strong {
 }
 
 .metric.warn {
-  border-color: var(--rust);
+  border-color: var(--warn);
 }
 
 .list {
@@ -420,7 +439,7 @@ strong {
   width: 100%;
   text-align: left;
   font: inherit;
-  color: var(--ink);
+  color: var(--text);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -430,14 +449,14 @@ strong {
 
 .row-btn:hover,
 .row-btn:focus-visible {
-  border-color: var(--gold);
+  border-color: var(--accent);
   outline: none;
 }
 
 /* Das gewaehlte Mitglied der Schnellauswahl bleibt sichtbar markiert. */
 .row-btn.active {
-  border-color: var(--gold);
-  background: color-mix(in srgb, var(--gold) 12%, var(--surface));
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 
 /* Enthaelt ein Listeneintrag nur diese Schaltflaeche, gestaltet sie ihn allein. */
@@ -465,12 +484,12 @@ strong {
 }
 
 .row strong {
-  color: var(--ink);
+  color: var(--text);
   font-weight: 500;
 }
 
 .row.grand {
-  color: var(--ink);
+  color: var(--text);
   font-size: var(--fs-lead);
 }
 
@@ -520,8 +539,8 @@ strong {
 .field select,
 .field textarea {
   width: 100%;
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--background);
+  color: var(--text);
   font-size: 1rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -571,7 +590,7 @@ strong {
 .field input[type="file"]::file-selector-button {
   margin-right: 0.7rem;
   background: var(--surface-2);
-  color: var(--ink);
+  color: var(--text);
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 0.35rem 0.8rem;
@@ -585,7 +604,7 @@ strong {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  color: var(--ink);
+  color: var(--text);
   cursor: pointer;
 }
 
@@ -594,7 +613,7 @@ strong {
   height: 1.15rem;
   flex: none;
   margin: 0;
-  accent-color: var(--gold);
+  accent-color: var(--accent);
 }
 
 .drink-row {
@@ -639,13 +658,15 @@ strong {
   gap: 0.35rem;
 }
 
+/* Plus und Minus sind die Knoepfe, die am Abend am haeufigsten getroffen werden
+   muessen. Die Sekundaerfarbe hebt sie von der Zeile ab. */
 .qty button {
   width: 1.8rem;
   height: 1.8rem;
   border: 0;
   border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--ink);
+  background: var(--secondary);
+  color: var(--text);
   cursor: pointer;
 }
 
@@ -653,8 +674,8 @@ strong {
   width: 3.4rem;
   font-variant-numeric: tabular-nums;
   text-align: center;
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--background);
+  color: var(--text);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.45rem 0.2rem;
@@ -676,7 +697,8 @@ strong {
 
 .badge {
   font-size: 0.8rem;
-  border: 1px solid var(--line);
+  color: var(--primary);
+  border: 1px solid var(--secondary);
   border-radius: 999px;
   padding: 0.15rem 0.5rem;
 }
@@ -684,8 +706,8 @@ strong {
 .copy-box {
   width: 100%;
   min-height: 8rem;
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--background);
+  color: var(--text);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 0.8rem;

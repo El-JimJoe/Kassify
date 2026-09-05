@@ -3,8 +3,8 @@
   "short_name": "Kassify",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#12110f",
-  "theme_color": "#12110f",
+  "background_color": "#050a0a",
+  "theme_color": "#050a0a",
   "lang": "de",
   "icons": [
     {
