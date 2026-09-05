@@ -267,6 +267,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.get_member(ctx, int(m.group(1)), int(m.group(2)))
         if m and method == "PUT":
             return self.edit_member(ctx, int(m.group(1)), int(m.group(2)))
+        if m and method == "DELETE":
+            return self.delete_member(ctx, int(m.group(1)), int(m.group(2)))
 
         m = re.fullmatch(r"/api/cashboxes/(\d+)/members/(\d+)/deactivate", path)
         if m and method == "POST":
@@ -277,6 +279,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/cashboxes/(\d+)/members/(\d+)/deposit", path)
         if m and method == "POST":
             return self.member_money(ctx, int(m.group(1)), int(m.group(2)), "deposit")
+        m = re.fullmatch(r"/api/cashboxes/(\d+)/deposits", path)
+        if m and method == "GET":
+            return self.list_deposits(ctx, int(m.group(1)))
         m = re.fullmatch(r"/api/cashboxes/(\d+)/members/(\d+)/correction", path)
         if m and method == "POST":
             return self.member_correction(ctx, int(m.group(1)), int(m.group(2)))
@@ -677,6 +682,49 @@ class Handler(BaseHTTPRequestHandler):
         db.audit(cashbox_id, "member", member_id, "deactivate", ctx["role"], {"active": True}, {"active": False})
         return self.get_member(ctx, cashbox_id, member_id)
 
+    def delete_member(self, ctx, cashbox_id, member_id):
+        """Entfernt ein versehentlich angelegtes Mitglied endgültig.
+
+        Sobald Striche oder Geldbewegungen erfasst sind, waere die Kasse nicht
+        mehr nachvollziehbar. Dann bleibt nur das Stilllegen.
+        """
+        require_write(ctx)
+        member = self.get_member(ctx, cashbox_id, member_id)
+        lines = db.one("SELECT COUNT(*) AS n FROM drink_lines WHERE member_id = ?", (member_id,))
+        if int(lines["n"]):
+            raise HttpError(
+                400,
+                f"Für {member['name']} sind schon Striche erfasst. "
+                "Bitte stattdessen deaktivieren, damit die Vorgänge nachvollziehbar bleiben.",
+            )
+        money = db.one(
+            "SELECT COALESCE(SUM(ABS(money_cents)), 0) AS n FROM ledger WHERE member_id = ?",
+            (member_id,),
+        )
+        if int(money["n"]):
+            raise HttpError(
+                400,
+                f"Für {member['name']} sind schon Geldbewegungen erfasst. "
+                "Bitte stattdessen deaktivieren, damit die Kasse nachvollziehbar bleibt.",
+            )
+        with db.transaction():
+            db.audit(
+                cashbox_id,
+                "member",
+                member_id,
+                "delete",
+                ctx["role"],
+                {
+                    "name": member["name"],
+                    "shortName": member["short_name"],
+                    "balanceCents": member["balanceCents"],
+                },
+                None,
+            )
+            db.execute("DELETE FROM ledger WHERE member_id = ?", (member_id,))
+            db.execute("DELETE FROM members WHERE id = ?", (member_id,))
+        return {"ok": True, "name": member["name"]}
+
     def reactivate_member(self, ctx, cashbox_id, member_id):
         require_write(ctx)
         self.get_member(ctx, cashbox_id, member_id)
@@ -712,6 +760,28 @@ class Handler(BaseHTTPRequestHandler):
             {"amountCents": amount, "note": note},
         )
         return self.get_member(ctx, cashbox_id, member_id)
+
+    def list_deposits(self, ctx, cashbox_id):
+        """Wer wann wie viel eingezahlt hat.
+
+        Gezeigt wird jedes Geld, das von einem Mitglied hereinkam. Dazu gehoert
+        auch ein Startguthaben, das als "gerade eingegangen" erfasst wurde.
+        Korrekturen bewegen kein Geld und stehen deshalb nicht hier.
+        """
+        scoped(ctx, cashbox_id)
+        return {
+            "deposits": db.rows(
+                """
+                SELECT l.id, l.booked_on, l.amount_cents, l.kind, l.note, l.created_at,
+                       l.member_id, m.name AS member_name
+                FROM ledger l
+                LEFT JOIN members m ON m.id = l.member_id
+                WHERE l.cashbox_id = ? AND l.money_cents > 0
+                ORDER BY l.booked_on DESC, l.id DESC
+                """,
+                (cashbox_id,),
+            )
+        }
 
     def member_correction(self, ctx, cashbox_id, member_id):
         require_write(ctx)

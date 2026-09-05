@@ -222,9 +222,8 @@ function renderNav() {
   const items = [
     ["home", "Übersicht"],
     ["members", "Mitglieder"],
-    ["drinks", "Erfassen", canWrite()],
+    ["drinks", "Erfassen"],
     ["pay", "Einzahlung", canWrite()],
-    ["events", "Vorgänge"],
     ["account", "Konto"],
     ["purchases", "Einkäufe"],
     ["reminders", "Mahnliste", canWrite()],
@@ -644,7 +643,11 @@ async function renderMember() {
               ${field("Notiz", "note", member.note)}
               <button class="ghost" type="submit">Stammdaten speichern</button>
             </form>
-            <button class="ghost" id="toggle-active">${member.active ? "Deaktivieren" : "Reaktivieren"}</button>`
+            <div class="row-actions">
+              <button class="ghost" id="toggle-active">${member.active ? "Deaktivieren" : "Reaktivieren"}</button>
+              <button class="ghost danger" id="delete-member">Entfernen</button>
+            </div>
+            <p class="hint">Deaktivieren behält alle Buchungen und nimmt das Mitglied nur aus den Listen. Entfernen geht nur, solange keine Striche und kein Geld erfasst sind.</p>`
           : ""
       }
     </div>`;
@@ -706,58 +709,284 @@ async function renderMember() {
         setBanner(error.message);
       }
     });
+    document.getElementById("delete-member").addEventListener("click", async () => {
+      if (!confirm(`${member.name} endgültig entfernen? Das lässt sich nicht zurücknehmen.`)) return;
+      try {
+        await api(`/cashboxes/${state.boxId}/members/${member.id}`, { method: "DELETE" });
+        go("members", { boxId: state.boxId });
+      } catch (error) {
+        setBanner(error.message);
+      }
+    });
   }
 }
 
-function auditList(items) {
+/* Das Protokoll wird als Satz gelesen, nicht als Datensatz. Deshalb werden
+   Aktion, Rolle und Feldnamen uebersetzt und nur die Werte gezeigt, die sich
+   tatsaechlich geaendert haben. */
+const AUDIT_ACTIONS = {
+  create: "Angelegt",
+  update: "Geändert",
+  delete: "Entfernt",
+  deposit: "Einzahlung",
+  payout: "Auszahlung",
+  correction: "Korrektur",
+  settle: "Saldo ausgeglichen",
+  deactivate: "Stillgelegt",
+  reactivate: "Wieder aktiv",
+  void: "Storniert",
+  reimburse: "Erstattung",
+  snapshot: "Kontostand erfasst",
+  export: "Sicherung erstellt",
+  export_csv: "Auswertung exportiert",
+  import: "Daten eingelesen",
+  login: "Angemeldet",
+  login_failed: "Anmeldung fehlgeschlagen",
+  logout: "Abgemeldet",
+  revoke: "Sitzung beendet",
+  password_set: "Passwort gesetzt",
+  access_update: "Zugang geändert",
+};
+
+const AUDIT_ROLES = { admin: "Admin", editor: "Bearbeiter", reader: "Leser" };
+
+const AUDIT_FIELDS = {
+  name: "Name",
+  shortName: "Kürzel",
+  short_name: "Kürzel",
+  note: "Notiz",
+  date: "Datum",
+  label: "Bezeichnung",
+  active: "Aktiv",
+  amountCents: "Betrag",
+  balanceCents: "Guthaben",
+  startBalanceCents: "Startguthaben",
+  startKind: "Startguthaben",
+  drinkPriceCents: "Preis je Strich",
+  openingBalanceCents: "Anfangsbestand",
+  openingDate: "Datum Anfangsbestand",
+  openingSource: "Herkunft Anfangsbestand",
+  accountName: "Konto",
+  accountUrl: "Link zum Konto",
+  feeFree: "Gebührenfrei",
+  vendor: "Händler",
+  description: "Beschreibung",
+  receiptCents: "Bonbetrag",
+  pfandCents: "Pfand",
+  pfandGiven: "Pfand abgegeben",
+  advancedBy: "Vorgestreckt von",
+  reimburseNow: "Sofort erstattet",
+  reimburseCents: "Erstattungsbetrag",
+  reimburseDate: "Erstattungsdatum",
+  reimburseRef: "Referenz der Erstattung",
+  reason: "Grund",
+  lines: "Striche",
+  mode: "Art",
+  created: "Angelegte Kassen",
+  rows: "Zeilen",
+  from: "Von",
+  to: "Bis",
+  cashboxes: "Kassen",
+  members: "Mitglieder",
+  role: "Rolle",
+  enabled: "Freigeschaltet",
+  sessionId: "Sitzung",
+};
+
+const AUDIT_DATE_FIELDS = ["date", "booked_on", "openingDate", "reimburseDate"];
+
+/* Technische Schluessel und Passwoerter gehoeren nicht in die Anzeige. */
+const AUDIT_SKIP_FIELDS = ["id", "cashboxId", "memberId", "confirmWord", "confirmName", "password"];
+
+function strokeText(n) {
+  return n === 1 ? "1 Strich" : `${n} Striche`;
+}
+
+function peopleText(n) {
+  return n === 1 ? "1 Person" : `${n} Personen`;
+}
+
+function memberLabel(id, names) {
+  return names[id] || names[Number(id)] || `Mitglied ${id}`;
+}
+
+/* Bei Getraenkevorgaengen stehen die Mengen als {Mitglieds-Id: Striche}. */
+function isQtyMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((k) => /^\d+$/.test(k) && typeof value[k] === "number");
+}
+
+function auditValue(key, value, names) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "ja" : "nein";
+  if (key === "startKind") return value === "deposit" ? "gerade eingegangen" : "im Anfangsbestand";
+  if (/Cents$/.test(key)) return euro(Number(value));
+  if (AUDIT_DATE_FIELDS.includes(key)) return isoToDE(String(value));
+  if (Array.isArray(value)) {
+    if (!value.length) return "—";
+    if (value.every((v) => v && typeof v === "object" && "memberId" in v))
+      return value.map((v) => `${memberLabel(v.memberId, names)} ${v.qty}`).join(", ");
+    return value.map((v) => (typeof v === "object" ? JSON.stringify(v) : String(v))).join(", ");
+  }
+  if (isQtyMap(value)) {
+    const parts = Object.entries(value)
+      .filter(([, qty]) => qty > 0)
+      .map(([id, qty]) => `${memberLabel(id, names)} ${qty}`);
+    return parts.length ? parts.join(", ") : "keine";
+  }
+  if (typeof value === "object") {
+    const parts = Object.entries(value).map(([k, v]) => `${AUDIT_FIELDS[k] || k}: ${auditValue(k, v, names)}`);
+    return parts.length ? parts.join(", ") : "—";
+  }
+  return String(value);
+}
+
+function auditDetails(entry, names) {
+  let before = null;
+  let after = null;
+  try {
+    before = entry.before_json ? JSON.parse(entry.before_json) : null;
+    after = entry.after_json ? JSON.parse(entry.after_json) : null;
+  } catch {
+    return [];
+  }
+  // Striche werden je Mitglied verglichen, sonst liest man zwei Zahlenlisten.
+  if (isQtyMap(before) || isQtyMap(after)) {
+    const ids = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+    const out = [];
+    ids.forEach((id) => {
+      const from = Number((before || {})[id] || 0);
+      const to = Number((after || {})[id] || 0);
+      if (from !== to) out.push(`${memberLabel(id, names)}: ${from} → ${strokeText(to)}`);
+    });
+    return out.length ? out : ["Keine Änderung an den Strichen."];
+  }
+  const plain = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const label = (key) => AUDIT_FIELDS[key] || key;
+  if (plain(before) && plain(after)) {
+    const out = [];
+    Object.keys(after).forEach((key) => {
+      if (AUDIT_SKIP_FIELDS.includes(key)) return;
+      const to = auditValue(key, after[key], names);
+      // Ein Pfeil nur, wenn es vorher wirklich einen anderen Wert gab. Sonst
+      // stand da "Betrag: — → 3,00 €", was niemand liest.
+      if (!(key in before)) return out.push(`${label(key)}: ${to}`);
+      const from = auditValue(key, before[key], names);
+      if (from !== to) out.push(`${label(key)}: ${from} → ${to}`);
+    });
+    Object.keys(before).forEach((key) => {
+      if (AUDIT_SKIP_FIELDS.includes(key) || key in after) return;
+      out.push(`${label(key)} vorher: ${auditValue(key, before[key], names)}`);
+    });
+    if (out.length) return out;
+  }
+  const source = plain(after) ? after : plain(before) ? before : null;
+  if (!source) return [];
+  const prefix = plain(after) ? "" : " vorher";
+  return Object.entries(source)
+    .filter(([key]) => !AUDIT_SKIP_FIELDS.includes(key))
+    .map(([key, value]) => `${label(key)}${prefix}: ${auditValue(key, value, names)}`);
+}
+
+function auditList(items, names = {}) {
   if (!items?.length) return `<p class="empty">Keine Einträge.</p>`;
   return `<ul class="list">${items
-    .map((e) => `<li>
-      <div class="row-split"><strong>${isoToDETime(e.created_at)} · ${esc(e.role)} · ${esc(e.action)}</strong></div>
-      <div class="muted">vorher: ${esc(e.before_json || "—")}</div>
-      <div class="muted">nachher: ${esc(e.after_json || "—")}</div>
-    </li>`)
+    .map((e) => {
+      const what = AUDIT_ACTIONS[e.action] || e.action;
+      const who = AUDIT_ROLES[e.role] || e.role;
+      const details = auditDetails(e, names);
+      return `<li>
+      <div class="row-split"><strong>${esc(what)}</strong><span class="muted">${isoToDETime(e.created_at)}</span></div>
+      <div class="muted">von ${esc(who)}${e.note ? ` · ${esc(e.note)}` : ""}</div>
+      ${details.length ? `<ul class="plain">${details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+    </li>`;
+    })
     .join("")}</ul>`;
 }
 
+const PAY_HITS_SHOWN = 8;
+
+function payTabs(active) {
+  return `<div class="tabs">
+    <button data-paytab="deposit" class="${active === "deposit" ? "active ghost" : "ghost"}">Einzahlung</button>
+    <button data-paytab="log" class="${active === "log" ? "active ghost" : "ghost"}">Protokoll</button>
+  </div>`;
+}
+
+function bindPayTabs() {
+  view()
+    .querySelectorAll("[data-paytab]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () => go("pay", { boxId: state.boxId, tab: btn.dataset.paytab }))
+    );
+}
+
 async function renderPay() {
+  if (state.params.tab === "log") return renderPayLog();
   const members = (await api(`/cashboxes/${state.boxId}/members`)).members.filter((m) => m.active);
   if (
     !showIf(
       "pay",
       `<section class="stack narrow">
     <h2>Einzahlung</h2>
-    <input class="search" id="pay-search" placeholder="Mitglied suchen" />
-    <div id="pay-hits" class="list"></div>
+    ${payTabs("deposit")}
     <form id="pay-form" class="stack" hidden>
       <p id="pay-who"></p>
       ${moneyField("Betrag", "amount")}
       ${dateField("Datum", "date")}
       ${field("Referenz", "note")}
       <button class="pay" type="submit">Speichern</button>
+      <p class="error" id="form-error" hidden></p>
     </form>
-    <p class="error" id="form-error" hidden></p>
+    <div class="stack">
+      <input class="search" id="pay-search" placeholder="Mitglied suchen" aria-label="Mitglied suchen" />
+      <div id="pay-hits" class="list"></div>
+      <p class="muted" id="pay-more" hidden></p>
+    </div>
   </section>`
     )
   )
     return;
   let chosen = null;
   const hits = document.getElementById("pay-hits");
+  const more = document.getElementById("pay-more");
   const form = document.getElementById("pay-form");
+  /* Bei vielen Mitgliedern wird die Liste unbenutzbar lang. Ohne Suchbegriff
+     stehen deshalb nur die ersten Namen da, der Rest kommt ueber die Suche. */
   function show(filter) {
     const q = filter.trim().toLowerCase();
+    const found = members.filter(
+      (m) => !q || m.name.toLowerCase().includes(q) || (m.short_name || "").toLowerCase().includes(q)
+    );
+    const shown = found.slice(0, PAY_HITS_SHOWN);
     hits.replaceChildren();
-    members
-      .filter((m) => !q || m.name.toLowerCase().includes(q) || (m.short_name || "").toLowerCase().includes(q))
-      .forEach((m) => {
-        const btn = el(`<button class="row-btn" type="button"><div class="row-split"><strong>${esc(m.name)}</strong><span>${euro(m.balanceCents)}</span></div></button>`);
-        btn.addEventListener("click", () => {
-          chosen = m;
-          document.getElementById("pay-who").textContent = m.name;
-          form.hidden = false;
-        });
-        hits.appendChild(btn);
+    shown.forEach((m) => {
+      const btn = el(
+        `<button class="row-btn ${m.id === chosen?.id ? "active" : ""}" type="button"><div class="row-split"><strong>${esc(
+          m.name
+        )}</strong><span class="${m.balanceCents < 0 ? "minus" : ""}">${euro(m.balanceCents)}</span></div></button>`
+      );
+      btn.addEventListener("click", () => {
+        chosen = m;
+        document.getElementById("pay-who").innerHTML = `<strong>${esc(m.name)}</strong> · Guthaben ${euro(
+          m.balanceCents
+        )}`;
+        form.hidden = false;
+        show(filter);
+        form.querySelector('[name="amount"]').focus();
       });
+      hits.appendChild(btn);
+    });
+    if (!found.length) {
+      more.hidden = false;
+      more.textContent = "Kein Mitglied gefunden.";
+    } else if (found.length > shown.length) {
+      more.hidden = false;
+      more.textContent = `${found.length - shown.length} weitere · Namen eintippen, um sie zu finden.`;
+    } else {
+      more.hidden = true;
+    }
   }
   document.getElementById("pay-search").addEventListener("input", (e) => show(e.target.value));
   show("");
@@ -767,57 +996,231 @@ async function renderPay() {
       method: "POST",
       body: JSON.stringify({ amountCents: parseEuro(data.amount), date: requireDate(data.date), note: data.note }),
     });
-    go("member", { boxId: state.boxId, memberId: chosen.id });
+    go("pay", { boxId: state.boxId, tab: "log" });
   });
+  bindPayTabs();
 }
 
-async function renderDrinks() {
-  const members = (await api(`/cashboxes/${state.boxId}/members`)).members.filter((m) => m.active);
-  const box = await api(`/cashboxes/${state.boxId}`);
-  const eventId = state.params.eventId;
-  let existing = null;
-  if (eventId) existing = await api(`/cashboxes/${state.boxId}/drinks/${eventId}`);
-  if (state.view !== "drinks") return;
-  const qtys = {};
-  if (existing) existing.lines.forEach((l) => (qtys[l.memberId] = l.qty));
-  const price = existing ? existing.priceCents : box.drink_price_cents;
-  const tab = existing ? state.params.tab || "capture" : "capture";
-  const tabs = existing
-    ? `<div class="tabs">
-        <button data-tab="capture" class="${tab === "capture" ? "active ghost" : "ghost"}">Erfassung</button>
-        <button data-tab="audit" class="${tab === "audit" ? "active ghost" : "ghost"}">Protokoll</button>
-      </div>`
-    : "";
-  const captureBody = `<form id="drink-form">
-      ${dateField("Datum", "date", existing?.booked_on)}
-      ${field("Bezeichnung", "label", existing?.label || "", `placeholder="z. B. Treffen"`)}
-      <div id="drink-list"></div>
-      <div class="sticky-sum">
-        <div class="row grand"><span id="drink-sum">0 Striche = 0,00 €</span></div>
-        ${canWrite() ? `<button class="pay" type="submit">Speichern</button>` : ""}
-        ${existing && canWrite() ? `<button class="ghost" type="button" id="void-event">Stornieren</button>` : ""}
-        <p class="error" id="form-error" hidden></p>
-      </div>
-    </form>`;
+async function renderPayLog() {
+  const data = await api(`/cashboxes/${state.boxId}/deposits`);
+  if (state.view !== "pay") return;
+  const total = data.deposits.reduce((s, d) => s + d.amount_cents, 0);
   if (
     !showIf(
-      "drinks",
-      `<section>
-    <div class="catalog-head"><h2>${existing ? "Vorgang ändern" : "Erfassen"}</h2><p>${euro(price)} / Strich</p></div>
-    ${tabs}
-    ${tab === "audit" ? auditList(existing.audit) : captureBody}
+      "pay",
+      `<section class="stack narrow">
+    <h2>Einzahlung</h2>
+    ${payTabs("log")}
+    ${
+      data.deposits.length
+        ? `<div class="row grand"><span>${
+            data.deposits.length === 1 ? "1 Einzahlung" : `${data.deposits.length} Einzahlungen`
+          }</span><span>${euro(total)}</span></div>`
+        : ""
+    }
+    <ul class="list">${
+      data.deposits
+        .map((d) => {
+          const parts = [isoToDE(d.booked_on)];
+          if (d.kind === "start") parts.push("Startguthaben");
+          if (d.note) parts.push(esc(d.note));
+          return `<li>
+            <button class="row-btn" data-member="${d.member_id}">
+              <div class="row-split"><strong>${esc(d.member_name || "Entferntes Mitglied")}</strong><span>${euro(
+            d.amount_cents
+          )}</span></div>
+              <div class="muted">${parts.join(" · ")}</div>
+            </button>
+          </li>`;
+        })
+        .join("") || `<li class="empty">Noch keine Einzahlungen.</li>`
+    }</ul>
   </section>`
     )
   )
     return;
+  bindPayTabs();
+  view()
+    .querySelectorAll("[data-member]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () =>
+        go("member", { boxId: state.boxId, memberId: Number(btn.dataset.member) })
+      )
+    );
+}
+
+async function renderDrinks() {
+  const eventId = state.params.eventId;
+  if (eventId) return renderDrinkEvent(eventId);
+  // Wer nicht schreiben darf, hat vom Erfassungsbogen nichts und landet im Protokoll.
+  const tab = state.params.tab || (canWrite() ? "capture" : "log");
+  if (tab === "log" || !canWrite()) return renderDrinkLog();
+  const members = (await api(`/cashboxes/${state.boxId}/members`)).members.filter((m) => m.active);
+  const box = await api(`/cashboxes/${state.boxId}`);
+  if (state.view !== "drinks") return;
+  const price = box.drink_price_cents;
+  if (
+    !showIf(
+      "drinks",
+      `<section>
+    <div class="catalog-head"><h2>Erfassen</h2><p>${euro(price)} / Strich</p></div>
+    ${drinkTabs("capture")}
+    <form id="drink-form">
+      ${dateField("Datum", "date")}
+      ${field("Bezeichnung", "label", "", `placeholder="z. B. Treffen"`)}
+      <div id="drink-list"></div>
+      <div class="sticky-sum">
+        <div class="row grand"><span id="drink-sum">0 Striche = 0,00 €</span></div>
+        ${canWrite() ? `<button class="pay" type="submit">Speichern</button>` : ""}
+        <p class="error" id="form-error" hidden></p>
+      </div>
+    </form>
+  </section>`
+    )
+  )
+    return;
+  bindDrinkTabs();
+  bindDrinkForm(members, {}, price, null);
+}
+
+function drinkTabs(active) {
+  return `<div class="tabs">
+    ${
+      canWrite()
+        ? `<button data-drinktab="capture" class="${active === "capture" ? "active ghost" : "ghost"}">Erfassen</button>`
+        : ""
+    }
+    <button data-drinktab="log" class="${active === "log" ? "active ghost" : "ghost"}">Protokoll</button>
+  </div>`;
+}
+
+function bindDrinkTabs() {
+  view()
+    .querySelectorAll("[data-drinktab]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, tab: btn.dataset.drinktab }))
+    );
+}
+
+async function renderDrinkLog() {
+  const data = await api(`/cashboxes/${state.boxId}/drinks`);
+  if (state.view !== "drinks") return;
+  if (
+    !showIf(
+      "drinks",
+      `<section>
+    <div class="catalog-head"><h2>Erfassen</h2></div>
+    ${drinkTabs("log")}
+    <ul class="list">${
+      data.events
+        .map((e) => {
+          const strokes = strokeText(e.qty);
+          const heads = peopleText(e.people);
+          return `<li>
+            <button class="row-btn ${e.status === "voided" ? "voided" : ""}" data-id="${e.id}">
+              <div class="row-split"><strong>${isoToDE(e.booked_on)}${e.label ? ` · ${esc(e.label)}` : ""}</strong><span>${
+            e.status === "voided" ? "storniert" : euro(e.totalCents)
+          }</span></div>
+              <div class="muted">${strokes} · ${heads}</div>
+            </button>
+          </li>`;
+        })
+        .join("") || `<li class="empty">Noch nichts erfasst.</li>`
+    }</ul>
+  </section>`
+    )
+  )
+    return;
+  bindDrinkTabs();
+  view()
+    .querySelectorAll("[data-id]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, eventId: Number(btn.dataset.id) }))
+    );
+}
+
+async function renderDrinkEvent(eventId) {
+  const event = await api(`/cashboxes/${state.boxId}/drinks/${eventId}`);
+  const members = (await api(`/cashboxes/${state.boxId}/members`)).members.filter((m) => m.active);
+  if (state.view !== "drinks") return;
+  const qtys = {};
+  event.lines.forEach((l) => (qtys[l.memberId] = l.qty));
+  const names = {};
+  event.lines.forEach((l) => (names[l.memberId] = l.name));
+  members.forEach((m) => (names[m.id] = m.name));
+  const price = event.priceCents;
+  const voided = event.status === "voided";
+  const tab = state.params.tab || "lines";
+  const marked = event.lines.filter((l) => l.qty > 0);
+  const qty = marked.reduce((s, l) => s + l.qty, 0);
+  const strokes = strokeText(qty);
+  const heads = peopleText(marked.length);
+  let body = "";
+  if (tab === "audit") {
+    body = auditList(event.audit, names);
+  } else if (tab === "edit") {
+    body = `<form id="drink-form">
+      ${dateField("Datum", "date", event.booked_on)}
+      ${field("Bezeichnung", "label", event.label || "", `placeholder="z. B. Treffen"`)}
+      <div id="drink-list"></div>
+      <div class="sticky-sum">
+        <div class="row grand"><span id="drink-sum">0 Striche = 0,00 €</span></div>
+        <button class="pay" type="submit">Speichern</button>
+        <button class="ghost" type="button" id="void-event">Vorgang stornieren</button>
+        <p class="error" id="form-error" hidden></p>
+      </div>
+    </form>`;
+  } else {
+    // Nur die Mitglieder, die auch Striche bekommen haben.
+    body = `<div class="stack">
+      <div class="row grand"><span>${strokes} = ${euro(qty * price)}</span><span>${heads}</span></div>
+      <ul class="list">${
+        marked
+          .map(
+            (l) => `<li>
+              <div class="row-split"><strong>${esc(l.name)}</strong><span>${
+              strokeText(l.qty)
+            } · ${euro(l.cents)}</span></div>
+            </li>`
+          )
+          .join("") || `<li class="empty">In diesem Vorgang wurden keine Striche erfasst.</li>`
+      }</ul>
+      <p class="muted">${euro(price)} je Strich${voided ? " · Dieser Vorgang ist storniert." : ""}</p>
+    </div>`;
+  }
+  if (
+    !showIf(
+      "drinks",
+      `<section>
+    <div class="catalog-head"><h2>${isoToDE(event.booked_on)}${event.label ? ` · ${esc(event.label)}` : ""}</h2>
+      <button class="ghost" id="back-to-log" type="button">Zurück</button></div>
+    <div class="tabs">
+      <button data-tab="lines" class="${tab === "lines" ? "active ghost" : "ghost"}">Striche</button>
+      ${
+        canWrite() && !voided
+          ? `<button data-tab="edit" class="${tab === "edit" ? "active ghost" : "ghost"}">Ändern</button>`
+          : ""
+      }
+      <button data-tab="audit" class="${tab === "audit" ? "active ghost" : "ghost"}">Protokoll</button>
+    </div>
+    ${body}
+  </section>`
+    )
+  )
+    return;
+  document
+    .getElementById("back-to-log")
+    .addEventListener("click", () => go("drinks", { boxId: state.boxId, tab: "log" }));
   view()
     .querySelectorAll("[data-tab]")
     .forEach((btn) =>
-      btn.addEventListener("click", () =>
-        go("drinks", { boxId: state.boxId, eventId, tab: btn.dataset.tab })
-      )
+      btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, eventId, tab: btn.dataset.tab }))
     );
-  if (tab === "audit") return;
+  if (tab !== "edit") return;
+  bindDrinkForm(members, qtys, price, eventId);
+}
+
+function bindDrinkForm(members, qtys, price, eventId) {
   const list = document.getElementById("drink-list");
   const counts = {};
   members.forEach((m) => (counts[m.id] = qtys[m.id] || 0));
@@ -858,9 +1261,9 @@ async function renderDrinks() {
   function sum() {
     const qty = Object.values(counts).reduce((s, n) => s + n, 0);
     const people = Object.values(counts).filter((n) => n > 0).length;
-    const strokes = qty === 1 ? "1 Strich" : `${qty} Striche`;
-    const heads = people === 1 ? "1 Person" : `${people} Personen`;
-    document.getElementById("drink-sum").textContent = `${strokes} = ${euro(qty * price)}, ${heads}`;
+    document.getElementById("drink-sum").textContent = `${strokeText(qty)} = ${euro(qty * price)}, ${peopleText(
+      people
+    )}`;
   }
   draw();
   bindForm("drink-form", async (data) => {
@@ -871,39 +1274,17 @@ async function renderDrinks() {
     const payload = { date: requireDate(data.date), label: data.label, lines };
     if (eventId) await api(`/cashboxes/${state.boxId}/drinks/${eventId}`, { method: "PUT", body: JSON.stringify(payload) });
     else await api(`/cashboxes/${state.boxId}/drinks`, { method: "POST", body: JSON.stringify(payload) });
-    go("events", { boxId: state.boxId });
+    go("drinks", { boxId: state.boxId, tab: "log" });
   });
   document.getElementById("void-event")?.addEventListener("click", async () => {
+    if (!confirm("Diesen Vorgang stornieren? Die Striche werden zurückgebucht.")) return;
     try {
       await api(`/cashboxes/${state.boxId}/drinks/${eventId}/void`, { method: "POST", body: "{}" });
-      go("events", { boxId: state.boxId });
+      go("drinks", { boxId: state.boxId, tab: "log" });
     } catch (error) {
       setBanner(error.message);
     }
   });
-}
-
-async function renderEvents() {
-  const data = await api(`/cashboxes/${state.boxId}/drinks`);
-  if (state.view !== "events") return;
-  view().innerHTML = `<section>
-    <div class="catalog-head"><h2>Vorgänge</h2></div>
-    <ul class="list">${
-      data.events
-        .map(
-          (e) => `<li>
-            <button class="row-btn ${e.status === "voided" ? "voided" : ""}" data-id="${e.id}">
-              <div class="row-split"><strong>${isoToDE(e.booked_on)} ${esc(e.label || "")}</strong><span>${e.status === "voided" ? "STORNIERT" : euro(e.totalCents)}</span></div>
-              <div class="muted">${e.qty} Striche · ${e.people} Personen</div>
-            </button>
-          </li>`
-        )
-        .join("") || `<li class="empty">Noch keine Vorgänge.</li>`
-    }</ul>
-  </section>`;
-  view().querySelectorAll("[data-id]").forEach((btn) =>
-    btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, eventId: Number(btn.dataset.id) }))
-  );
 }
 
 async function renderAccount() {
@@ -1423,7 +1804,6 @@ async function render(seq) {
       member: renderMember,
       drinks: renderDrinks,
       pay: renderPay,
-      events: renderEvents,
       account: renderAccount,
       purchases: renderPurchases,
       "purchase-new": renderPurchaseNew,
