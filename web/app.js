@@ -147,6 +147,36 @@ function field(label, name, value, extra = "") {
   return `<label class="field">${label}<input name="${name}" value="${esc(value || "")}" ${extra} /></label>`;
 }
 
+/* Kontrollkästchen tragen bewusst nicht die Feldklasse: die zieht jede Eingabe
+   auf volle Breite und schöbe den Text unter das Kästchen. */
+function checkField(label, name, checked = false) {
+  return `<label class="check"><input type="checkbox" name="${name}" ${
+    checked ? "checked" : ""
+  } /><span>${label}</span></label>`;
+}
+
+function pageHead(title, extra = "") {
+  return `<div class="page-head"><h2>${title}</h2>${extra}</div>`;
+}
+
+/* Untertabs sehen überall gleich aus. `items` ist eine Liste aus Schlüssel und
+   Beschriftung; leere Einträge lassen sich je nach Rolle weglassen. */
+function tabBar(items, current) {
+  return `<div class="tabs">${items
+    .filter(Boolean)
+    .map(
+      ([key, label]) =>
+        `<button class="ghost ${key === current ? "active" : ""}" data-tab="${key}">${label}</button>`
+    )
+    .join("")}</div>`;
+}
+
+/* Guthaben grün, Schulden rot samt Warnzeichen. */
+function balanceSpan(cents, extra = "") {
+  const cls = cents < 0 ? "minus" : cents > 0 ? "plus" : "";
+  return `<span class="${[extra, cls].filter(Boolean).join(" ")}">${cents < 0 ? "⚠ " : ""}${euro(cents)}</span>`;
+}
+
 function esc(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -375,8 +405,8 @@ async function renderBoxes() {
   if (
     !showIf(
       "boxes",
-      `<section>
-    <div class="catalog-head"><h2>Kassen</h2>${isAdmin() ? `<button class="ghost" id="new-box">Neue Kasse</button>` : ""}</div>
+      `<section class="page">
+    ${pageHead("Kassen", isAdmin() ? `<button class="ghost" id="new-box">Neue Kasse</button>` : "")}
     <ul class="list">${cards || `<li class="empty">Noch keine Kasse.</li>`}</ul>
   </section>`
     )
@@ -395,8 +425,8 @@ async function renderBoxes() {
 function renderBoxNew() {
   showIf(
     "box-new",
-    `<section class="stack narrow">
-    <h2>Neue Kasse</h2>
+    `<section class="page narrow">
+    ${pageHead("Neue Kasse")}
     <form id="box-form" class="stack">
       ${field("Bezeichnung", "name")}
       ${moneyField("Getränkepreis", "drinkPrice", 100)}
@@ -405,7 +435,7 @@ function renderBoxNew() {
       ${moneyField("Anfangsbestand", "opening")}
       ${dateField("Datum Anfangsbestand", "openingDate")}
       ${field("Herkunft", "openingSource", "", `placeholder="z. B. PayPal-Stand"`)}
-      <label class="field"><span><input type="checkbox" name="feeFree" checked /> Zahlungen kommen gebührenfrei an</span></label>
+      ${checkField("Zahlungen kommen gebührenfrei an", "feeFree", true)}
       <p class="hint">Nur eintragen, was wirklich auf dem Konto lag.</p>
       <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">Anlegen</button>
@@ -436,10 +466,21 @@ function metricCard(label, cents, warn = false) {
   return `<div class="metric${warn ? " warn" : ""}"><span>${label}</span><strong>${euro(cents)}</strong></div>`;
 }
 
+/* Wie viele Minusstände die Übersicht auflistet. Der Rest steht unter
+   „Mitglieder“, sonst schiebt eine lange Liste alle Kennzahlen aus dem Bild. */
+const HOME_MINUS_SHOWN = 8;
+
 async function renderHome() {
-  const box = await api(`/cashboxes/${state.boxId}`);
+  const [box, memberData] = await Promise.all([
+    api(`/cashboxes/${state.boxId}`),
+    api(`/cashboxes/${state.boxId}/members`),
+  ]);
   if (state.view !== "home") return;
   state.me.cashboxName = box.name;
+  const debtors = memberData.members
+    .filter((m) => m.balanceCents < 0)
+    .sort((a, b) => a.balanceCents - b.balanceCents);
+  const debt = debtors.reduce((s, m) => s + m.balanceCents, 0);
   const stale = daysAgo(box.istDate) > 28;
   const backupStale = state.me.lastBackupAt && daysAgo(state.me.lastBackupAt.slice(0, 10)) > 28;
   if (stale)
@@ -453,8 +494,8 @@ async function renderHome() {
   if (
     !showIf(
       "home",
-      `<section>
-    <div class="catalog-head"><h2>${esc(box.name)}</h2><p>${box.memberCount} Mitglieder · ${box.minusCount} im Minus</p></div>
+      `<section class="page">
+    ${pageHead(esc(box.name), `<p>${box.memberCount} Mitglieder · ${box.minusCount} im Minus</p>`)}
     <div class="metrics">
       ${metricCard("Kontostand jetzt", box.accountNowCents)}
       ${metricCard("Kassen-Soll", box.sollCents)}
@@ -472,21 +513,51 @@ async function renderHome() {
           : ""
       }
     </div>
-    <p class="hint">„Kontostand jetzt“ ist der Anfangsbestand plus alle erfassten Geldbewegungen — so viel muss in diesem Moment auf dem Konto liegen. Weicht das echte Konto davon ab, fehlt Geld oder eine Buchung.</p>
+    <div class="stack">
+      <p class="hint">„Kontostand jetzt“ ist der Anfangsbestand plus alle erfassten Geldbewegungen — so viel muss in diesem Moment auf dem Konto liegen. Weicht das echte Konto davon ab, fehlt Geld oder eine Buchung.</p>
+      ${
+        box.hasSnapshot
+          ? box.flowsSinceIstCents
+            ? `<p class="hint">Seit dem erfassten Stand vom ${isoToDE(box.istDate)} sind ${euro(
+                box.flowsSinceIstCents
+              )} bewegt worden.</p>`
+            : ""
+          : `<p class="hint">Es ist noch kein Kontostand erfasst. Trage unter „Konto“ ein, was wirklich auf dem Konto liegt, dann prüft die App die Abweichung.</p>`
+      }
+    </div>
+    ${pageHead("Mitglieder im Minus", `<p>${euro(debt)} offen</p>`)}
+    <ul class="list">${
+      debtors
+        .slice(0, HOME_MINUS_SHOWN)
+        .map(
+          (m) => `<li><button class="row-btn" data-member="${m.id}">
+            <div class="row-split"><strong>${esc(m.name)}${
+            m.active ? "" : " · inaktiv"
+          }</strong>${balanceSpan(m.balanceCents)}</div>
+          </button></li>`
+        )
+        .join("") || `<li class="empty">Niemand steht im Minus.</li>`
+    }</ul>
     ${
-      box.hasSnapshot
-        ? box.flowsSinceIstCents
-          ? `<p class="hint">Seit dem erfassten Stand vom ${isoToDE(box.istDate)} sind ${euro(
-              box.flowsSinceIstCents
-            )} bewegt worden.</p>`
-          : ""
-        : `<p class="hint">Es ist noch kein Kontostand erfasst. Trage unter „Konto“ ein, was wirklich auf dem Konto liegt, dann prüft die App die Abweichung.</p>`
+      debtors.length > HOME_MINUS_SHOWN
+        ? `<button class="ghost" type="button" id="all-minus">Alle ${debtors.length} Minusstände zeigen</button>`
+        : ""
     }
-    <p><button class="ghost" type="button" id="kick-sessions">Andere Geräte abmelden</button></p>
+    <button class="ghost" type="button" id="kick-sessions">Andere Geräte abmelden</button>
   </section>`
     )
   )
     return;
+  view()
+    .querySelectorAll("[data-member]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () =>
+        go("member", { boxId: state.boxId, memberId: Number(btn.dataset.member) })
+      )
+    );
+  document
+    .getElementById("all-minus")
+    ?.addEventListener("click", () => go("members", { boxId: state.boxId, minus: true, sort: "balance" }));
   document.getElementById("kick-sessions").addEventListener("click", async () => {
     try {
       const data = await api("/sessions");
@@ -525,30 +596,30 @@ async function renderMembers() {
   if (
     !showIf(
       "members",
-      `<section>
-    <div class="catalog-head">
-      <h2>Mitglieder</h2>
-      ${canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : ""}
-    </div>
+      `<section class="page">
+    ${pageHead("Mitglieder", canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : "")}
     <div class="tabs">
-      <button class="${sort === "name" ? "active ghost" : "ghost"}" data-sort="name">Name</button>
-      <button class="${sort === "balance" ? "active ghost" : "ghost"}" data-sort="balance">Guthaben</button>
+      <button class="ghost ${sort === "name" ? "active" : ""}" data-sort="name">Name</button>
+      <button class="ghost ${sort === "balance" ? "active" : ""}" data-sort="balance">Guthaben</button>
       <button class="ghost" id="filter-minus">${minusOnly ? "Alle zeigen" : "Nur Minusstände"}</button>
     </div>
     <ul class="list" id="member-list">
-      ${items
-        .map((m) => {
-          const minus = m.balanceCents < 0;
-          return `<li><button class="row-btn" data-id="${m.id}">
+      ${
+        items
+          .map(
+            (m) => `<li><button class="row-btn" data-id="${m.id}">
             <div class="row-split">
               <strong>${esc(m.name)}${m.active ? "" : " · inaktiv"}</strong>
-              <span class="${minus ? "minus" : ""}">${minus ? "⚠ " : ""}${euro(m.balanceCents)}</span>
+              ${balanceSpan(m.balanceCents)}
             </div>
-          </button></li>`;
-        })
-        .join("")}
+          </button></li>`
+          )
+          .join("") || `<li class="empty">Kein Mitglied gefunden.</li>`
+      }
     </ul>
-    <div class="row grand"><span>Soll / Verbindlichkeit / Forderung</span><strong>${euro(soll)} · ${euro(pos)} · ${euro(neg)}</strong></div>
+    <div class="row grand"><span>Kassen-Soll / Verbindlichkeit / Forderung</span><strong>${euro(soll)} · ${euro(
+        pos
+      )} · ${euro(neg)}</strong></div>
   </section>`
     )
   )
@@ -568,8 +639,8 @@ async function renderMembers() {
 function renderMemberNew() {
   showIf(
     "member-new",
-    `<section class="stack narrow">
-    <h2>Mitglied hinzufügen</h2>
+    `<section class="page narrow">
+    ${pageHead("Mitglied hinzufügen")}
     <form id="member-form" class="stack">
       ${field("Anzeigename", "name")}
       ${field("Kürzel", "shortName")}
@@ -608,7 +679,6 @@ async function renderMember() {
   const member = await api(`/cashboxes/${state.boxId}/members/${state.params.memberId}`);
   if (state.view !== "member") return;
   const tab = state.params.tab || "overview";
-  const minus = member.balanceCents < 0;
   let body = "";
   if (tab === "ledger") {
     body = `<ul class="list">${member.ledger
@@ -623,9 +693,13 @@ async function renderMember() {
   } else if (tab === "audit") {
     body = auditList(member.audit);
   } else {
-    body = `<div class="stack">
-      <p class="${minus ? "minus" : ""}">${minus ? "⚠ " : ""}Guthaben ${euro(member.balanceCents)}</p>
-      <p class="muted">${esc(member.short_name || "")} ${esc(member.note || "")}</p>
+    body = `<div class="stack form-block">
+      <div class="row grand"><span>Guthaben</span>${balanceSpan(member.balanceCents)}</div>
+      ${
+        member.short_name || member.note
+          ? `<p class="muted">${[esc(member.short_name || ""), esc(member.note || "")].filter(Boolean).join(" · ")}</p>`
+          : ""
+      }
       ${
         canWrite()
           ? `<form id="deposit-form" class="stack">
@@ -671,13 +745,16 @@ async function renderMember() {
   if (
     !showIf(
       "member",
-      `<section>
-    <div class="catalog-head"><h2>${esc(member.name)}</h2></div>
-    <div class="tabs">
-      <button data-tab="overview" class="${tab === "overview" ? "active ghost" : "ghost"}">Übersicht</button>
-      <button data-tab="ledger" class="${tab === "ledger" ? "active ghost" : "ghost"}">Buchungen</button>
-      <button data-tab="audit" class="${tab === "audit" ? "active ghost" : "ghost"}">Protokoll</button>
-    </div>
+      `<section class="page">
+    ${pageHead(esc(member.name))}
+    ${tabBar(
+      [
+        ["overview", "Übersicht"],
+        ["ledger", "Buchungen"],
+        ["audit", "Protokoll"],
+      ],
+      tab
+    )}
     ${body}
     <p class="error" id="form-error" hidden></p>
   </section>`
@@ -906,7 +983,7 @@ function auditDetails(entry, names) {
 }
 
 function auditList(items, names = {}) {
-  if (!items?.length) return `<p class="empty">Keine Einträge.</p>`;
+  if (!items?.length) return `<ul class="list"><li class="empty">Keine Einträge.</li></ul>`;
   return `<ul class="list">${items
     .map((e) => {
       const what = AUDIT_ACTIONS[e.action] || e.action;
@@ -924,18 +1001,19 @@ function auditList(items, names = {}) {
 const PAY_HITS_SHOWN = 8;
 
 function payTabs(active) {
-  return `<div class="tabs">
-    <button data-paytab="deposit" class="${active === "deposit" ? "active ghost" : "ghost"}">Einzahlung</button>
-    <button data-paytab="log" class="${active === "log" ? "active ghost" : "ghost"}">Protokoll</button>
-  </div>`;
+  return tabBar(
+    [
+      ["deposit", "Einzahlung"],
+      ["log", "Protokoll"],
+    ],
+    active
+  );
 }
 
 function bindPayTabs() {
   view()
-    .querySelectorAll("[data-paytab]")
-    .forEach((btn) =>
-      btn.addEventListener("click", () => go("pay", { boxId: state.boxId, tab: btn.dataset.paytab }))
-    );
+    .querySelectorAll("[data-tab]")
+    .forEach((btn) => btn.addEventListener("click", () => go("pay", { boxId: state.boxId, tab: btn.dataset.tab })));
 }
 
 async function renderPay() {
@@ -944,8 +1022,8 @@ async function renderPay() {
   if (
     !showIf(
       "pay",
-      `<section class="stack narrow">
-    <h2>Einzahlung</h2>
+      `<section class="page narrow">
+    ${pageHead("Einzahlung")}
     ${payTabs("deposit")}
     <form id="pay-form" class="stack" hidden>
       <p id="pay-who"></p>
@@ -956,8 +1034,9 @@ async function renderPay() {
       <p class="error" id="form-error" hidden></p>
     </form>
     <div class="stack">
+      <h3>Mitglied wählen</h3>
       <input class="search" id="pay-search" placeholder="Mitglied suchen" aria-label="Mitglied suchen" />
-      <div id="pay-hits" class="list"></div>
+      <ul id="pay-hits" class="list"></ul>
       <p class="muted" id="pay-more" hidden></p>
     </div>
   </section>`
@@ -978,21 +1057,24 @@ async function renderPay() {
     const shown = found.slice(0, PAY_HITS_SHOWN);
     hits.replaceChildren();
     shown.forEach((m) => {
-      const btn = el(
-        `<button class="row-btn ${m.id === chosen?.id ? "active" : ""}" type="button"><div class="row-split"><strong>${esc(
-          m.name
-        )}</strong><span class="${m.balanceCents < 0 ? "minus" : ""}">${euro(m.balanceCents)}</span></div></button>`
+      const item = el(
+        `<li><button class="row-btn ${
+          m.id === chosen?.id ? "active" : ""
+        }" type="button"><div class="row-split"><strong>${esc(m.name)}</strong>${balanceSpan(
+          m.balanceCents
+        )}</div></button></li>`
       );
+      const btn = item.querySelector("button");
       btn.addEventListener("click", () => {
         chosen = m;
-        document.getElementById("pay-who").innerHTML = `<strong>${esc(m.name)}</strong> · Guthaben ${euro(
-          m.balanceCents
-        )}`;
+        document.getElementById("pay-who").innerHTML = `<span class="row-split"><strong>${esc(
+          m.name
+        )}</strong>${balanceSpan(m.balanceCents)}</span>`;
         form.hidden = false;
         show(filter);
         form.querySelector('[name="amount"]').focus();
       });
-      hits.appendChild(btn);
+      hits.appendChild(item);
     });
     if (!found.length) {
       more.hidden = false;
@@ -1024,14 +1106,14 @@ async function renderPayLog() {
   if (
     !showIf(
       "pay",
-      `<section class="stack narrow">
-    <h2>Einzahlung</h2>
+      `<section class="page narrow">
+    ${pageHead("Einzahlung")}
     ${payTabs("log")}
     ${
       data.deposits.length
         ? `<div class="row grand"><span>${
             data.deposits.length === 1 ? "1 Einzahlung" : `${data.deposits.length} Einzahlungen`
-          }</span><span>${euro(total)}</span></div>`
+          }</span><strong>${euro(total)}</strong></div>`
         : ""
     }
     <ul class="list">${
@@ -1078,14 +1160,14 @@ async function renderDrinks() {
   if (
     !showIf(
       "drinks",
-      `<section>
-    <div class="catalog-head"><h2>Erfassen</h2><p>${euro(price)} / Strich</p></div>
+      `<section class="page">
+    ${pageHead("Erfassen", `<p>${euro(price)} / Strich</p>`)}
     ${drinkTabs("capture")}
-    <form id="drink-form">
+    <form id="drink-form" class="stack">
       ${dateField("Datum", "date")}
       ${field("Bezeichnung", "label", "", `placeholder="z. B. Treffen"`)}
       <div id="drink-list"></div>
-      <div class="sticky-sum">
+      <div class="sticky-sum stack">
         <div class="row grand"><span id="drink-sum">0 Striche = 0,00 €</span></div>
         ${canWrite() ? `<button class="pay" type="submit">Speichern</button>` : ""}
         <p class="error" id="form-error" hidden></p>
@@ -1100,22 +1182,13 @@ async function renderDrinks() {
 }
 
 function drinkTabs(active) {
-  return `<div class="tabs">
-    ${
-      canWrite()
-        ? `<button data-drinktab="capture" class="${active === "capture" ? "active ghost" : "ghost"}">Erfassen</button>`
-        : ""
-    }
-    <button data-drinktab="log" class="${active === "log" ? "active ghost" : "ghost"}">Protokoll</button>
-  </div>`;
+  return tabBar([canWrite() && ["capture", "Erfassen"], ["log", "Protokoll"]], active);
 }
 
 function bindDrinkTabs() {
   view()
-    .querySelectorAll("[data-drinktab]")
-    .forEach((btn) =>
-      btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, tab: btn.dataset.drinktab }))
-    );
+    .querySelectorAll("[data-tab]")
+    .forEach((btn) => btn.addEventListener("click", () => go("drinks", { boxId: state.boxId, tab: btn.dataset.tab })));
 }
 
 async function renderDrinkLog() {
@@ -1124,8 +1197,8 @@ async function renderDrinkLog() {
   if (
     !showIf(
       "drinks",
-      `<section>
-    <div class="catalog-head"><h2>Erfassen</h2></div>
+      `<section class="page">
+    ${pageHead("Erfassen")}
     ${drinkTabs("log")}
     <ul class="list">${
       data.events
@@ -1175,11 +1248,11 @@ async function renderDrinkEvent(eventId) {
   if (tab === "audit") {
     body = auditList(event.audit, names);
   } else if (tab === "edit") {
-    body = `<form id="drink-form">
+    body = `<form id="drink-form" class="stack">
       ${dateField("Datum", "date", event.booked_on)}
       ${field("Bezeichnung", "label", event.label || "", `placeholder="z. B. Treffen"`)}
       <div id="drink-list"></div>
-      <div class="sticky-sum">
+      <div class="sticky-sum stack">
         <div class="row grand"><span id="drink-sum">0 Striche = 0,00 €</span></div>
         <button class="pay" type="submit">Speichern</button>
         <button class="ghost" type="button" id="void-event">Vorgang stornieren</button>
@@ -1207,18 +1280,15 @@ async function renderDrinkEvent(eventId) {
   if (
     !showIf(
       "drinks",
-      `<section>
-    <div class="catalog-head"><h2>${isoToDE(event.booked_on)}${event.label ? ` · ${esc(event.label)}` : ""}</h2>
-      <button class="ghost" id="back-to-log" type="button">Zurück</button></div>
-    <div class="tabs">
-      <button data-tab="lines" class="${tab === "lines" ? "active ghost" : "ghost"}">Striche</button>
-      ${
-        canWrite() && !voided
-          ? `<button data-tab="edit" class="${tab === "edit" ? "active ghost" : "ghost"}">Ändern</button>`
-          : ""
-      }
-      <button data-tab="audit" class="${tab === "audit" ? "active ghost" : "ghost"}">Protokoll</button>
-    </div>
+      `<section class="page">
+    ${pageHead(
+      `${isoToDE(event.booked_on)}${event.label ? ` · ${esc(event.label)}` : ""}`,
+      `<button class="ghost" id="back-to-log" type="button">Zurück</button>`
+    )}
+    ${tabBar(
+      [["lines", "Striche"], canWrite() && !voided && ["edit", "Ändern"], ["audit", "Protokoll"]],
+      tab
+    )}
     ${body}
   </section>`
     )
@@ -1244,7 +1314,7 @@ function bindDrinkForm(members, qtys, price, eventId) {
     list.replaceChildren();
     members.forEach((m) => {
       const row = el(`<div class="drink-row">
-        <div class="who"><strong>${esc(m.name)}</strong><span class="bal ${m.balanceCents < 0 ? "minus" : ""}">${m.balanceCents < 0 ? "⚠ " : ""}${euro(m.balanceCents)}</span></div>
+        <div class="who"><strong>${esc(m.name)}</strong>${balanceSpan(m.balanceCents, "bal")}</div>
         <div class="qty">
           <button type="button" data-act="dec">−</button>
           <input class="qty-input" inputmode="numeric" value="${counts[m.id]}" />
@@ -1317,7 +1387,8 @@ async function renderAccount() {
   if (tab === "audit") body = auditList(data.audit);
   else {
     const m = data.metrics;
-    body = `${link}
+    body = `<div class="page">
+      ${link}
       <div class="metrics">
         ${metricCard("Kontostand jetzt", m.accountNowCents)}
         ${metricCard("Überschuss", m.surplusCents)}
@@ -1350,7 +1421,7 @@ async function renderAccount() {
       }</ul>
       ${
         canWrite()
-          ? `<form id="snap-form" class="stack">
+          ? `<form id="snap-form" class="stack form-block">
               <h3>Kontostand erfassen</h3>
               ${moneyField("Betrag", "amount")}
               ${dateField("Datum", "date")}
@@ -1360,15 +1431,28 @@ async function renderAccount() {
             </form>`
           : ""
       }
-      <h3>Verlauf</h3>
-      <ul class="list">${data.snapshots.map((s) => `<li class="row-split"><span>${isoToDE(s.booked_on)} · ${esc(s.source)}</span><strong>${euro(s.amount_cents)}</strong></li>`).join("")}</ul>`;
+      <h3>Erfasste Stände</h3>
+      <ul class="list">${
+        data.snapshots
+          .map(
+            (s) =>
+              `<li class="row-split"><span>${isoToDE(s.booked_on)}${
+                s.source ? ` · ${esc(s.source)}` : ""
+              }</span><strong>${euro(s.amount_cents)}</strong></li>`
+          )
+          .join("") || `<li class="empty">Noch nichts erfasst.</li>`
+      }</ul>
+    </div>`;
   }
-  view().innerHTML = `<section>
-    <div class="catalog-head"><h2>Konto</h2></div>
-    <div class="tabs">
-      <button class="ghost ${tab === "overview" ? "active" : ""}" data-tab="overview">Übersicht</button>
-      <button class="ghost ${tab === "audit" ? "active" : ""}" data-tab="audit">Protokoll</button>
-    </div>
+  view().innerHTML = `<section class="page">
+    ${pageHead("Konto")}
+    ${tabBar(
+      [
+        ["overview", "Übersicht"],
+        ["audit", "Protokoll"],
+      ],
+      tab
+    )}
     ${body}
     <p class="error" id="form-error" hidden></p>
   </section>`;
@@ -1395,8 +1479,8 @@ async function renderPurchases() {
   if (state.params.purchaseId) return renderPurchaseDetail();
   const data = await api(`/cashboxes/${state.boxId}/purchases`);
   if (state.view !== "purchases") return;
-  view().innerHTML = `<section>
-    <div class="catalog-head"><h2>Einkäufe</h2>${canWrite() ? `<button class="ghost" id="new-buy">Erfassen</button>` : ""}</div>
+  view().innerHTML = `<section class="page">
+    ${pageHead("Einkäufe", canWrite() ? `<button class="ghost" id="new-buy">Erfassen</button>` : "")}
     <ul class="list">${
       data.purchases
         .map(
@@ -1415,18 +1499,18 @@ async function renderPurchases() {
 }
 
 function renderPurchaseNew() {
-  view().innerHTML = `<section class="stack narrow">
-    <h2>Einkauf</h2>
+  view().innerHTML = `<section class="page narrow">
+    ${pageHead("Einkauf erfassen")}
     <form id="buy-form" class="stack">
       ${dateField("Datum", "date")}
       ${field("Händler", "vendor")}
       ${field("Was", "description")}
       ${moneyField("Bon-Endbetrag", "receipt")}
-      <label class="field"><span><input type="checkbox" name="pfandGiven" /> Pfand abgegeben</span></label>
+      ${checkField("Pfand abgegeben", "pfandGiven")}
       ${moneyField("Pfandbetrag", "pfand")}
       ${field("Vorgestreckt von", "advancedBy")}
       ${field("Notiz", "note")}
-      <label class="field"><span><input type="checkbox" name="reimburseNow" checked /> Sofort in gleicher Höhe erstatten</span></label>
+      ${checkField("Sofort in gleicher Höhe erstatten", "reimburseNow", true)}
       ${dateField("Erstattungsdatum", "reimburseDate")}
       ${moneyField("Erstattungsbetrag (leer = Bon)", "reimburse")}
       ${field("Erstattungsreferenz", "reimburseRef")}
@@ -1463,12 +1547,12 @@ async function renderPurchaseDetail() {
   const eq = p.pfand_given
     ? `<p>Einkaufswert ${euro(p.goodsCents)} − Pfand ${euro(p.pfand_cents)} = Bon-Endbetrag ${euro(p.receipt_cents)}</p>`
     : `<p>Bon-Endbetrag ${euro(p.receipt_cents)}</p>`;
-  const editBody = `<form id="buy-edit-form" class="stack">
+  const editBody = `<form id="buy-edit-form" class="stack form-block">
       ${dateField("Datum", "date", p.booked_on)}
       ${field("Händler", "vendor", p.vendor)}
       ${field("Was", "description", p.description)}
       ${moneyField("Bon-Endbetrag", "receipt", p.receipt_cents)}
-      <label class="field"><span><input type="checkbox" name="pfandGiven" ${p.pfand_given ? "checked" : ""} /> Pfand abgegeben</span></label>
+      ${checkField("Pfand abgegeben", "pfandGiven", p.pfand_given)}
       ${moneyField("Pfandbetrag", "pfand", p.pfand_cents)}
       ${field("Vorgestreckt von", "advancedBy", p.advanced_by)}
       ${field("Notiz", "note", p.note)}
@@ -1480,12 +1564,20 @@ async function renderPurchaseDetail() {
       ? auditList(p.audit)
       : tab === "edit"
       ? editBody
-      : `${eq}
-        <p class="muted">${esc(p.vendor)} · ${esc(p.description)} · ${esc(p.advanced_by)}</p>
-        <p>Status: ${PURCHASE_STATUS[p.status] || p.status} · Rest ${euro(p.restCents)}</p>
+      : `<div class="page">
+        <div class="stack">
+          ${eq}
+          <p class="muted">${[esc(p.vendor), esc(p.description), esc(p.advanced_by)]
+            .filter(Boolean)
+            .join(" · ")}</p>
+          <div class="row grand"><span>${PURCHASE_STATUS[p.status] || esc(p.status)}</span><strong>Rest ${euro(
+          p.restCents
+        )}</strong></div>
+        </div>
         ${
           canWrite() && p.restCents > 0
-            ? `<form id="payback-form" class="stack">
+            ? `<form id="payback-form" class="stack form-block">
+                <h3>Erstattung buchen</h3>
                 ${moneyField("Erstattung", "amount", p.restCents)}
                 ${dateField("Datum", "date")}
                 ${field("Referenz", "reference")}
@@ -1493,17 +1585,26 @@ async function renderPurchaseDetail() {
               </form>`
             : ""
         }
-        <ul class="list">${p.reimbursements.map((r) => `<li class="row-split"><span>${isoToDE(r.booked_on)} ${esc(r.reference)}</span><strong>${euro(r.amount_cents)}</strong></li>`).join("")}</ul>`;
+        <h3>Erstattungen</h3>
+        <ul class="list">${
+          p.reimbursements
+            .map(
+              (r) => `<li class="row-split"><span>${isoToDE(r.booked_on)}${
+                r.reference ? ` · ${esc(r.reference)}` : ""
+              }</span><strong>${euro(r.amount_cents)}</strong></li>`
+            )
+            .join("") || `<li class="empty">Noch nichts erstattet.</li>`
+        }</ul>
+      </div>`;
   if (
     !showIf(
       "purchases",
-      `<section>
-    <div class="catalog-head"><h2>Einkauf ${isoToDE(p.booked_on)}</h2></div>
-    <div class="tabs">
-      <button class="${tab === "overview" ? "active ghost" : "ghost"}" data-tab="overview">Übersicht</button>
-      ${canWrite() ? `<button class="${tab === "edit" ? "active ghost" : "ghost"}" data-tab="edit">Bearbeiten</button>` : ""}
-      <button class="${tab === "audit" ? "active ghost" : "ghost"}" data-tab="audit">Protokoll</button>
-    </div>
+      `<section class="page">
+    ${pageHead(`Einkauf ${isoToDE(p.booked_on)}`)}
+    ${tabBar(
+      [["overview", "Übersicht"], canWrite() && ["edit", "Bearbeiten"], ["audit", "Protokoll"]],
+      tab
+    )}
     ${body}
     <p class="error" id="form-error" hidden></p>
   </section>`
@@ -1550,8 +1651,8 @@ async function renderReminders() {
   const data = await api(`/cashboxes/${state.boxId}/reminders`);
   if (state.view !== "reminders") return;
   const text = data.members.map((m) => `${m.name}: ${euro(m.balanceCents)}`).join("\n") || "Keine Minusstände.";
-  view().innerHTML = `<section class="stack">
-    <div class="catalog-head"><h2>Mahnliste</h2></div>
+  view().innerHTML = `<section class="page narrow">
+    ${pageHead("Mahnliste", `<p>${data.members.length} im Minus</p>`)}
     <textarea class="copy-box" id="copy-text" readonly>${esc(text)}</textarea>
     <button class="pay" id="copy-btn" type="button">Liste kopieren</button>
   </section>`;
@@ -1567,11 +1668,14 @@ async function renderReminders() {
 }
 
 async function renderBackup() {
-  view().innerHTML = `<section class="stack narrow">
-    <h2>Sicherung</h2>
-    <p class="hint">Die Datei enthält Klarnamen, Salden und Zugänge. Nicht in Cloud, Chat oder Git legen. Passwörter stehen nicht im Klartext, ein Import in eine andere Instanz gibt aber vollen Zugriff.</p>
-    <button class="pay" id="export-all" type="button">Gesamtexport</button>
-    ${state.boxId ? `<button class="ghost" id="export-one" type="button">Diese Kasse exportieren</button>` : ""}
+  view().innerHTML = `<section class="page narrow">
+    ${pageHead("Sicherung")}
+    <div class="stack">
+      <h3>Export</h3>
+      <p class="hint">Die Datei enthält Klarnamen, Salden und Zugänge. Nicht in Cloud, Chat oder Git legen. Passwörter stehen nicht im Klartext, ein Import in eine andere Instanz gibt aber vollen Zugriff.</p>
+      <button class="pay" id="export-all" type="button">Gesamtexport</button>
+      ${state.boxId ? `<button class="ghost" id="export-one" type="button">Diese Kasse exportieren</button>` : ""}
+    </div>
     <div id="export-summary"></div>
     <form id="import-form" class="stack">
       <h3>Import</h3>
@@ -1705,11 +1809,13 @@ async function showExportSummary(payload, fileName) {
 }
 
 async function renderCsv() {
-  view().innerHTML = `<section class="stack narrow">
-    <h2>Auswertung</h2>
+  view().innerHTML = `<section class="page narrow">
+    ${pageHead("Auswertung")}
     <form id="csv-form" class="stack">
+      <p class="hint">Alle Buchungen des gewählten Zeitraums als CSV-Datei, etwa für die Jahresabrechnung.</p>
       ${dateField("Von", "from")}
       ${dateField("Bis", "to")}
+      <p class="error" id="form-error" hidden></p>
       <button class="pay" type="submit">CSV laden</button>
     </form>
   </section>`;
@@ -1730,15 +1836,18 @@ async function renderCsv() {
 }
 
 async function renderManage() {
-  const box = await api(`/cashboxes/${state.boxId}`);
-  const access = await api(`/cashboxes/${state.boxId}/access`);
-  const audit = await api(`/cashboxes/${state.boxId}/audit`);
+  const tab = state.params.tab || "settings";
+  const [box, access, audit] = await Promise.all([
+    api(`/cashboxes/${state.boxId}`),
+    api(`/cashboxes/${state.boxId}/access`),
+    api(`/cashboxes/${state.boxId}/audit`),
+  ]);
   if (state.view !== "manage") return;
   const editor = access.accesses.find((a) => a.role === "editor");
   const reader = access.accesses.find((a) => a.role === "reader");
-  view().innerHTML = `<section class="stack narrow">
-    <h2>Kassenverwaltung</h2>
+  const settings = `<div class="page">
     <form id="box-edit" class="stack">
+      <h3>Stammdaten</h3>
       ${field("Bezeichnung", "name", box.name)}
       ${moneyField("Getränkepreis", "drinkPrice", box.drink_price_cents)}
       ${field("Kontobezeichnung", "accountName", box.account_name)}
@@ -1746,30 +1855,45 @@ async function renderManage() {
       ${moneyField("Anfangsbestand", "opening", box.opening_balance_cents)}
       ${dateField("Datum Anfangsbestand", "openingDate", box.opening_date)}
       ${field("Herkunft", "openingSource", box.opening_source)}
-      <label class="field"><span><input type="checkbox" name="feeFree" checked /> Zahlungen gebührenfrei</span></label>
+      ${checkField("Zahlungen gebührenfrei", "feeFree", true)}
       <button class="pay" type="submit">Speichern</button>
     </form>
     <form id="role-form" class="stack">
       <h3>Zugänge</h3>
       ${field("Editor-Passwort", "editorPassword", "", `type="password"`)}
-      <label class="field"><span><input type="checkbox" name="editorOn" ${editor?.enabled ? "checked" : ""} /> Editor aktiv</span></label>
+      ${checkField("Editor aktiv", "editorOn", editor?.enabled)}
       ${field("Reader-Passwort", "readerPassword", "", `type="password"`)}
-      <label class="field"><span><input type="checkbox" name="readerOn" ${reader?.enabled ? "checked" : ""} /> Reader aktiv</span></label>
+      ${checkField("Reader aktiv", "readerOn", reader?.enabled)}
       <button class="ghost" type="submit">Zugänge speichern</button>
     </form>
     <form id="del-form" class="stack">
       <h3>Kasse löschen</h3>
       <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Kassen-Soll ${euro(
-      box.sollCents
-    )}, Konto ${euro(box.accountNowCents)}. Zuerst Export.</p>
+    box.sollCents
+  )}, Konto ${euro(box.accountNowCents)}. Zuerst Export.</p>
       <button class="ghost" type="button" id="export-before">Export dieser Kasse</button>
       ${field("Vollständigen Kassennamen eintippen", "confirmName")}
       <button class="pay danger" type="submit">Unwiderruflich löschen</button>
     </form>
-    <h3>Protokoll</h3>
-    ${auditList(audit.audit)}
+  </div>`;
+  view().innerHTML = `<section class="page narrow">
+    ${pageHead("Kassenverwaltung")}
+    ${tabBar(
+      [
+        ["settings", "Einstellungen"],
+        ["audit", "Protokoll"],
+      ],
+      tab
+    )}
+    ${tab === "audit" ? auditList(audit.audit) : settings}
     <p class="error" id="form-error" hidden></p>
   </section>`;
+  view()
+    .querySelectorAll("[data-tab]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () => go("manage", { boxId: state.boxId, tab: btn.dataset.tab }))
+    );
+  if (tab === "audit") return;
   bindForm("box-edit", async (data, form) => {
     if (!form.feeFree.checked) throw new Error("Zahlungen mit Gebührenabzug werden in dieser Version nicht unterstützt.");
     await api(`/cashboxes/${state.boxId}`, {
