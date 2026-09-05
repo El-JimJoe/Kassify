@@ -1,4 +1,8 @@
 :root {
+  /* Sagt dem Browser, dass die App dunkel ist. Rollbalken, Datumswähler und
+     die Auswahllisten von <select> kommen sonst in Hellgrau daher. */
+  color-scheme: dark;
+
   --bg: #12110f;
   --surface: #1c1916;
   --surface-2: #27221d;
@@ -9,6 +13,7 @@
   --gold-ink: #1a1408;
   --rust: #c45c26;
   --ok: #8fbe7a;
+  --bad: #e7a08a;
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
 
   /* Der Inhalt bleibt auf Seitenbreite und mittig. Trennlinien und Farbbaender
@@ -121,7 +126,7 @@ strong {
 }
 
 .error {
-  color: #e7a08a;
+  color: var(--bad);
 }
 
 .app {
@@ -477,7 +482,7 @@ strong {
 }
 
 .minus {
-  color: #e7a08a;
+  color: var(--bad);
   font-weight: 600;
 }
 
@@ -525,6 +530,41 @@ strong {
 
 .field textarea {
   min-height: 4.5rem;
+}
+
+/* Eigene Auswahlliste zu einem Eingabefeld. Sie schwebt ueber dem Formular,
+   damit die Felder darunter beim Aufklappen nicht springen. */
+.combo {
+  position: relative;
+}
+
+.combo-list {
+  position: absolute;
+  z-index: 5;
+  inset-inline: 0;
+  top: calc(100% + 0.3rem);
+  max-height: 18rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  list-style: none;
+  margin: 0;
+  padding: var(--gap-sm);
+  display: grid;
+  gap: var(--gap-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* In der Auswahlliste stehen die Zeilen enger als in den Seitenlisten, damit
+   ohne Rollen mehr Namen zu sehen sind. */
+.combo-list .row-btn {
+  padding: 0.6rem 0.8rem;
+}
+
+.combo-list .empty {
+  padding: 0.6rem 0.8rem;
 }
 
 /* Der Knopf im Dateifeld kommt sonst in den hellen Standardfarben des Browsers. */

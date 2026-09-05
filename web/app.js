@@ -177,6 +177,48 @@ function balanceSpan(cents, extra = "") {
   return `<span class="${[extra, cls].filter(Boolean).join(" ")}">${cents < 0 ? "⚠ " : ""}${euro(cents)}</span>`;
 }
 
+const PAGE_SIZE = 10;
+
+/* Protokolle und Ereignislisten wachsen mit jedem Abend weiter, deshalb werden
+   sie seitenweise gezeigt. Die Seitennummer steht in den Parametern der
+   Ansicht und übersteht damit ein erneutes Zeichnen. `key` trennt mehrere
+   Listen auf derselben Seite. */
+function pagedList(entries, row, { key = "page", empty = "Keine Einträge." } = {}) {
+  const items = entries || [];
+  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const current = Math.min(Math.max(1, Number(state.params[key]) || 1), pages);
+  const from = (current - 1) * PAGE_SIZE;
+  const list = `<ul class="list">${
+    items
+      .slice(from, from + PAGE_SIZE)
+      .map(row)
+      .join("") || `<li class="empty">${empty}</li>`
+  }</ul>`;
+  if (pages < 2) return list;
+  const step = (to, label, off) =>
+    `<button class="ghost" type="button" data-page-key="${key}" data-page="${to}" ${
+      off ? "disabled" : ""
+    }>${label}</button>`;
+  return `${list}
+    <div class="pager">
+      ${step(current - 1, "Zurück", current === 1)}
+      <span class="muted">Seite ${current} von ${pages} · ${items.length} Einträge</span>
+      ${step(current + 1, "Weiter", current === pages)}
+    </div>`;
+}
+
+/* Die Blätterknöpfe tragen den Namen ihres Parameters im Element. Deshalb
+   genügt eine Bindung nach jedem Zeichnen für alle Listen der App. */
+function bindPagers() {
+  view()
+    .querySelectorAll("[data-page-key]")
+    .forEach((btn) =>
+      btn.addEventListener("click", () =>
+        go(state.view, { ...state.params, [btn.dataset.pageKey]: Number(btn.dataset.page) })
+      )
+    );
+}
+
 function esc(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -681,46 +723,22 @@ function renderMemberNew() {
   });
 }
 
-const MEMBER_EVENTS_PER_PAGE = 10;
-
-/* Eine Seite aus der Ereignisliste eines Mitglieds samt Blaetterleiste. Die
-   Buchungen kommen vom Server neueste zuerst, Seite 1 zeigt also das Aktuelle. */
-function memberEvents(entries, page) {
-  const pages = Math.max(1, Math.ceil(entries.length / MEMBER_EVENTS_PER_PAGE));
-  const current = Math.min(page, pages);
-  const start = (current - 1) * MEMBER_EVENTS_PER_PAGE;
-  const rows = entries.slice(start, start + MEMBER_EVENTS_PER_PAGE);
-  const list = `<ul class="list">${
-    rows
-      .map((e) => {
-        const tag = e.kind.includes("correction") || e.kind.includes("void") ? " · Korrektur/Storno" : "";
-        return `<li>
-          <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${
-          KIND[e.kind] || esc(e.kind)
-        }${tag}</strong><span>${euro(e.amount_cents)}</span></div>
-          <div class="muted">${[esc(e.note || ""), `Saldo ${euro(e.runningCents)}`]
-            .filter(Boolean)
-            .join(" · ")}</div>
-        </li>`;
-      })
-      .join("") || `<li class="empty">Noch keine Ereignisse.</li>`
-  }</ul>`;
-  if (pages < 2) return list;
-  return `${list}
-    <div class="pager">
-      <button class="ghost" type="button" data-page="${current - 1}" ${current === 1 ? "disabled" : ""}>Zurück</button>
-      <span class="muted">Seite ${current} von ${pages}</span>
-      <button class="ghost" type="button" data-page="${current + 1}" ${
-    current === pages ? "disabled" : ""
-  }>Weiter</button>
-    </div>`;
+/* Eine Zeile aus der Ereignisliste eines Mitglieds. Die Buchungen kommen vom
+   Server neueste zuerst, Seite 1 zeigt also das Aktuelle. */
+function memberEventRow(e) {
+  const tag = e.kind.includes("correction") || e.kind.includes("void") ? " · Korrektur/Storno" : "";
+  return `<li>
+    <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${
+    KIND[e.kind] || esc(e.kind)
+  }${tag}</strong><span>${euro(e.amount_cents)}</span></div>
+    <div class="muted">${[esc(e.note || ""), `Saldo ${euro(e.runningCents)}`].filter(Boolean).join(" · ")}</div>
+  </li>`;
 }
 
 async function renderMember() {
   const member = await api(`/cashboxes/${state.boxId}/members/${state.params.memberId}`);
   if (state.view !== "member") return;
   const tab = state.params.tab || "overview";
-  const page = Math.max(1, Number(state.params.page) || 1);
   let body = "";
   if (tab === "audit") {
     body = auditList(member.audit);
@@ -775,7 +793,7 @@ async function renderMember() {
           : ""
       }
       <h3>Ereignisse</h3>
-      ${memberEvents(member.ledger, page)}
+      ${pagedList(member.ledger, memberEventRow, { empty: "Noch keine Ereignisse." })}
     </div>`;
   }
   if (
@@ -801,11 +819,6 @@ async function renderMember() {
     return;
   view().querySelectorAll("[data-tab]").forEach((btn) =>
     btn.addEventListener("click", () => go("member", { boxId: state.boxId, memberId: member.id, tab: btn.dataset.tab }))
-  );
-  view().querySelectorAll("[data-page]").forEach((btn) =>
-    btn.addEventListener("click", () =>
-      go("member", { boxId: state.boxId, memberId: member.id, tab, page: Number(btn.dataset.page) })
-    )
   );
   const done = () => go("member", { boxId: state.boxId, memberId: member.id });
   if (tab === "deposit" && canWrite()) {
@@ -1033,9 +1046,9 @@ function auditDetails(entry, names) {
 }
 
 function auditList(items, names = {}) {
-  if (!items?.length) return `<ul class="list"><li class="empty">Keine Einträge.</li></ul>`;
-  return `<ul class="list">${items
-    .map((e) => {
+  return pagedList(
+    items,
+    (e) => {
       const what = AUDIT_ACTIONS[e.action] || e.action;
       const who = AUDIT_ROLES[e.role] || e.role;
       const details = auditDetails(e, names);
@@ -1044,8 +1057,9 @@ function auditList(items, names = {}) {
       <div class="muted">von ${esc(who)}${e.note ? ` · ${esc(e.note)}` : ""}</div>
       ${details.length ? `<ul class="plain">${details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
     </li>`;
-    })
-    .join("")}</ul>`;
+    },
+    { key: "log" }
+  );
 }
 
 function payTabs(active) {
@@ -1074,13 +1088,14 @@ async function renderPay() {
     ${pageHead("Einzahlung")}
     ${payTabs("deposit")}
     <form id="pay-form" class="stack">
-      <label class="field">Mitglied
-        <input name="member" id="pay-member" list="pay-members" autocomplete="off"
-          placeholder="Name eintippen oder aus der Liste wählen" />
-      </label>
-      <datalist id="pay-members">${members
-        .map((m) => `<option value="${esc(m.name)}" label="${euro(m.balanceCents)}"></option>`)
-        .join("")}</datalist>
+      <div class="field">Mitglied
+        <div class="combo">
+          <input name="member" id="pay-member" autocomplete="off" role="combobox"
+            aria-expanded="false" aria-controls="pay-options" aria-autocomplete="list"
+            placeholder="Antippen oder Namen eintippen" />
+          <ul class="combo-list" id="pay-options" role="listbox" hidden></ul>
+        </div>
+      </div>
       <p class="muted" id="pay-who">Noch kein Mitglied gewählt.</p>
       ${moneyField("Betrag", "amount")}
       ${dateField("Datum", "date")}
@@ -1092,30 +1107,111 @@ async function renderPay() {
     )
   )
     return;
-  /* Das Auswahlfeld ist ein Textfeld mit Vorschlagsliste: der Browser filtert
-     die Namen beim Tippen selbst. Uebrig bleibt der Abgleich des Eingetippten
-     mit der Mitgliederliste. */
+  /* Eigene Auswahlliste statt der Vorschlagsliste des Browsers: die klappt am
+     rechten Feldrand auf, ist auf dem Handy nicht zu sehen und lässt sich nicht
+     gestalten. Diese Liste hängt unter dem Feld und trägt das Design der App. */
+  const who = document.getElementById("pay-who");
+  const input = document.getElementById("pay-member");
+  const list = document.getElementById("pay-options");
+  const error = document.querySelector("#pay-form .error");
+  let rows = [];
+  let cursor = -1;
+
   const match = (text) => {
     const q = String(text || "").trim().toLowerCase();
     return q ? members.find((m) => m.name.toLowerCase() === q) || null : null;
   };
-  const who = document.getElementById("pay-who");
-  const input = document.getElementById("pay-member");
-  const error = document.querySelector("#pay-form .error");
-  input.addEventListener("input", () => {
-    error.hidden = true;
+
+  function close() {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    rows = [];
+    cursor = -1;
+  }
+
+  function highlight(next) {
+    if (!rows.length) return;
+    cursor = (next + rows.length) % rows.length;
+    rows.forEach((r, i) => r.button.classList.toggle("active", i === cursor));
+    rows[cursor].button.scrollIntoView({ block: "nearest" });
+  }
+
+  function tell() {
     const found = match(input.value);
+    who.className = found ? "" : "muted";
     if (found) {
-      who.className = "";
       who.innerHTML = `<span class="row-split"><strong>${esc(found.name)}</strong>${balanceSpan(
         found.balanceCents
       )}</span>`;
+    } else {
+      who.textContent = input.value.trim()
+        ? "Noch kein Treffer – Namen aus der Liste wählen."
+        : "Noch kein Mitglied gewählt.";
+    }
+  }
+
+  function pick(member) {
+    input.value = member.name;
+    error.hidden = true;
+    close();
+    tell();
+    document.querySelector('#pay-form [name="amount"]').focus();
+  }
+
+  function open() {
+    const q = input.value.trim().toLowerCase();
+    const found = members.filter((m) => !q || m.name.toLowerCase().includes(q));
+    list.replaceChildren();
+    rows = found.map((m) => {
+      const item = el(
+        `<li role="option"><button class="row-btn" type="button" tabindex="-1"><div class="row-split"><strong>${esc(
+          m.name
+        )}</strong>${balanceSpan(m.balanceCents)}</div></button></li>`
+      );
+      const button = item.querySelector("button");
+      /* Auf pointerdown reagieren, nicht auf click: sonst nimmt der
+         Fokuswechsel die Liste weg, bevor der Klick ankommt. */
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        pick(m);
+      });
+      list.appendChild(item);
+      return { member: m, button };
+    });
+    if (!rows.length) list.appendChild(el(`<li class="empty">Kein Mitglied gefunden.</li>`));
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    cursor = -1;
+  }
+
+  input.addEventListener("focus", open);
+  input.addEventListener("pointerdown", () => {
+    if (list.hidden) open();
+  });
+  input.addEventListener("input", () => {
+    error.hidden = true;
+    open();
+    tell();
+  });
+  input.addEventListener("blur", () => close());
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      close();
       return;
     }
-    who.className = "muted";
-    who.textContent = input.value.trim()
-      ? "Noch kein Treffer – Namen aus der Liste wählen."
-      : "Noch kein Mitglied gewählt.";
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (list.hidden) open();
+      highlight(cursor + (event.key === "ArrowDown" ? 1 : -1));
+      return;
+    }
+    if (event.key !== "Enter" || list.hidden) return;
+    // Ein hervorgehobener Eintrag oder ein einziger Treffer wird uebernommen,
+    // statt das Formular mit halber Eingabe abzuschicken.
+    const take = cursor >= 0 ? rows[cursor] : rows.length === 1 ? rows[0] : null;
+    if (!take) return;
+    event.preventDefault();
+    pick(take.member);
   });
   bindForm("pay-form", async (data) => {
     const chosen = match(data.member);
@@ -1146,23 +1242,23 @@ async function renderPayLog() {
           }</span><strong>${euro(total)}</strong></div>`
         : ""
     }
-    <ul class="list">${
-      data.deposits
-        .map((d) => {
-          const parts = [isoToDE(d.booked_on)];
-          if (d.kind === "start") parts.push("Startguthaben");
-          if (d.note) parts.push(esc(d.note));
-          return `<li>
-            <button class="row-btn" data-member="${d.member_id}">
-              <div class="row-split"><strong>${esc(d.member_name || "Entferntes Mitglied")}</strong><span>${euro(
-            d.amount_cents
-          )}</span></div>
-              <div class="muted">${parts.join(" · ")}</div>
-            </button>
-          </li>`;
-        })
-        .join("") || `<li class="empty">Noch keine Einzahlungen.</li>`
-    }</ul>
+    ${pagedList(
+      data.deposits,
+      (d) => {
+        const parts = [isoToDE(d.booked_on)];
+        if (d.kind === "start") parts.push("Startguthaben");
+        if (d.note) parts.push(esc(d.note));
+        return `<li>
+          <button class="row-btn" data-member="${d.member_id}">
+            <div class="row-split"><strong>${esc(d.member_name || "Entferntes Mitglied")}</strong><span>${euro(
+          d.amount_cents
+        )}</span></div>
+            <div class="muted">${parts.join(" · ")}</div>
+          </button>
+        </li>`;
+      },
+      { empty: "Noch keine Einzahlungen." }
+    )}
   </section>`
     )
   )
@@ -1230,22 +1326,18 @@ async function renderDrinkLog() {
       `<section class="page">
     ${pageHead("Erfassen")}
     ${drinkTabs("log")}
-    <ul class="list">${
-      data.events
-        .map((e) => {
-          const strokes = strokeText(e.qty);
-          const heads = peopleText(e.people);
-          return `<li>
-            <button class="row-btn ${e.status === "voided" ? "voided" : ""}" data-id="${e.id}">
-              <div class="row-split"><strong>${isoToDE(e.booked_on)}${e.label ? ` · ${esc(e.label)}` : ""}</strong><span>${
-            e.status === "voided" ? "storniert" : euro(e.totalCents)
-          }</span></div>
-              <div class="muted">${strokes} · ${heads}</div>
-            </button>
-          </li>`;
-        })
-        .join("") || `<li class="empty">Noch nichts erfasst.</li>`
-    }</ul>
+    ${pagedList(
+      data.events,
+      (e) => `<li>
+        <button class="row-btn ${e.status === "voided" ? "voided" : ""}" data-id="${e.id}">
+          <div class="row-split"><strong>${isoToDE(e.booked_on)}${
+        e.label ? ` · ${esc(e.label)}` : ""
+      }</strong><span>${e.status === "voided" ? "storniert" : euro(e.totalCents)}</span></div>
+          <div class="muted">${strokeText(e.qty)} · ${peopleText(e.people)}</div>
+        </button>
+      </li>`,
+      { empty: "Noch nichts erfasst." }
+    )}
   </section>`
     )
   )
@@ -1434,21 +1526,19 @@ async function renderAccount() {
         data.account.openingBalanceCents
       )} plus alle erfassten Geldbewegungen. Erfasse unten, was wirklich auf dem Konto liegt — stimmen die beiden Zahlen nicht überein, zeigt die Abweichung die Lücke.</p>
       <h3>Überschuss-Verlauf</h3>
-      <ul class="list">${
-        data.surplusHistory
-          .map(
-            (h) => `<li>
-            <div class="row-split"><span>${isoToDE(h.date)}</span><strong>Überschuss ${euro(
-              h.surplusCents
-            )}</strong></div>
-            <div class="muted">Konto ${euro(h.expectedCents)} − Kassen-Soll ${euro(h.sollCents)}</div>
-            <div class="${h.deviationCents ? "minus" : "muted"}">Erfasst ${euro(h.istCents)}${
-              h.deviationCents ? ` · Abweichung ${euro(h.deviationCents)}` : " · ohne Abweichung"
-            }</div>
-          </li>`
-          )
-          .join("") || `<li class="empty">Noch kein Kontostand erfasst.</li>`
-      }</ul>
+      ${pagedList(
+        data.surplusHistory,
+        (h) => `<li>
+          <div class="row-split"><span>${isoToDE(h.date)}</span><strong>Überschuss ${euro(
+          h.surplusCents
+        )}</strong></div>
+          <div class="muted">Konto ${euro(h.expectedCents)} − Kassen-Soll ${euro(h.sollCents)}</div>
+          <div class="${h.deviationCents ? "minus" : "muted"}">Erfasst ${euro(h.istCents)}${
+          h.deviationCents ? ` · Abweichung ${euro(h.deviationCents)}` : " · ohne Abweichung"
+        }</div>
+        </li>`,
+        { key: "hist", empty: "Noch kein Kontostand erfasst." }
+      )}
       ${
         canWrite()
           ? `<form id="snap-form" class="stack">
@@ -1462,16 +1552,14 @@ async function renderAccount() {
           : ""
       }
       <h3>Erfasste Stände</h3>
-      <ul class="list">${
-        data.snapshots
-          .map(
-            (s) =>
-              `<li class="row-split"><span>${isoToDE(s.booked_on)}${
-                s.source ? ` · ${esc(s.source)}` : ""
-              }</span><strong>${euro(s.amount_cents)}</strong></li>`
-          )
-          .join("") || `<li class="empty">Noch nichts erfasst.</li>`
-      }</ul>
+      ${pagedList(
+        data.snapshots,
+        (s) =>
+          `<li class="row-split"><span>${isoToDE(s.booked_on)}${
+            s.source ? ` · ${esc(s.source)}` : ""
+          }</span><strong>${euro(s.amount_cents)}</strong></li>`,
+        { key: "snaps", empty: "Noch nichts erfasst." }
+      )}
     </div>`;
   }
   view().innerHTML = `<section class="page">
@@ -1511,16 +1599,18 @@ async function renderPurchases() {
   if (state.view !== "purchases") return;
   view().innerHTML = `<section class="page">
     ${pageHead("Einkäufe", canWrite() ? `<button class="ghost" id="new-buy">Erfassen</button>` : "")}
-    <ul class="list">${
-      data.purchases
-        .map(
-          (p) => `<li><button class="row-btn" data-id="${p.id}">
-            <div class="row-split"><strong>${isoToDE(p.booked_on)} · ${esc(p.vendor)}</strong><span class="badge">${PURCHASE_STATUS[p.status] || p.status}</span></div>
-            <div class="row-split muted"><span>${esc(p.description)}</span><span>${euro(p.receipt_cents)} · Rest ${euro(p.restCents)}</span></div>
-          </button></li>`
-        )
-        .join("") || `<li class="empty">Keine Einkäufe.</li>`
-    }</ul>
+    ${pagedList(
+      data.purchases,
+      (p) => `<li><button class="row-btn" data-id="${p.id}">
+        <div class="row-split"><strong>${isoToDE(p.booked_on)} · ${esc(p.vendor)}</strong><span class="badge">${
+        PURCHASE_STATUS[p.status] || p.status
+      }</span></div>
+        <div class="row-split muted"><span>${esc(p.description)}</span><span>${euro(
+        p.receipt_cents
+      )} · Rest ${euro(p.restCents)}</span></div>
+      </button></li>`,
+      { empty: "Keine Einkäufe." }
+    )}
   </section>`;
   document.getElementById("new-buy")?.addEventListener("click", () => go("purchase-new", { boxId: state.boxId }));
   view().querySelectorAll("[data-id]").forEach((btn) =>
@@ -1616,15 +1706,13 @@ async function renderPurchaseDetail() {
             : ""
         }
         <h3>Erstattungen</h3>
-        <ul class="list">${
-          p.reimbursements
-            .map(
-              (r) => `<li class="row-split"><span>${isoToDE(r.booked_on)}${
-                r.reference ? ` · ${esc(r.reference)}` : ""
-              }</span><strong>${euro(r.amount_cents)}</strong></li>`
-            )
-            .join("") || `<li class="empty">Noch nichts erstattet.</li>`
-        }</ul>
+        ${pagedList(
+          p.reimbursements,
+          (r) => `<li class="row-split"><span>${isoToDE(r.booked_on)}${
+            r.reference ? ` · ${esc(r.reference)}` : ""
+          }</span><strong>${euro(r.amount_cents)}</strong></li>`,
+          { key: "refunds", empty: "Noch nichts erstattet." }
+        )}
       </div>`;
   if (
     !showIf(
@@ -2015,6 +2103,7 @@ async function render(seq) {
   }
   try {
     await fn();
+    if (seq === paintSeq && state.view === target) bindPagers();
   } catch (error) {
     if (seq === paintSeq && state.view === target) {
       view().innerHTML = `<p class="error">${esc(error.message)}</p>`;
