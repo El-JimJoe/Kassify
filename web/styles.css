@@ -198,13 +198,6 @@ strong {
   gap: var(--gap-lg);
 }
 
-/* Jede Seite ist gleich breit. Nur Eingabefelder werden begrenzt, damit sie am
-   Rechner nicht ueber die ganze Seitenbreite laufen. Der Block bleibt an der
-   linken Kante, sonst stuende er versetzt unter der Seitenueberschrift. */
-.form-block {
-  max-width: 36rem;
-}
-
 /* Zwischenueberschrift in einem Stapel braucht etwas mehr Luft nach oben als
    der normale Zeilenabstand. */
 .stack > h3,
