@@ -656,10 +656,13 @@ class Handler(BaseHTTPRequestHandler):
         for other in db.rows("SELECT id, name FROM members WHERE cashbox_id = ?", (cashbox_id,)):
             if other["id"] != member_id and name_key(other["name"]) == key:
                 raise HttpError(400, f"„{other['name']}“ gibt es in dieser Kasse schon.")
+        # Kuerzel und Notiz stehen nicht mehr in der Oberflaeche. Fehlt der
+        # Schluessel im Aufruf, bleibt der gespeicherte Wert stehen, statt von
+        # einer Umbenennung stillschweigend geleert zu werden.
         after = {
             "name": name,
-            "short_name": str(body.get("shortName") or "").strip(),
-            "note": str(body.get("note") or "").strip(),
+            "short_name": str(body.get("shortName", member["short_name"]) or "").strip(),
+            "note": str(body.get("note", member["note"]) or "").strip(),
         }
         db.execute(
             "UPDATE members SET name=?, short_name=?, note=? WHERE id=?",

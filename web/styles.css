@@ -218,6 +218,36 @@ strong {
   text-align: right;
 }
 
+/* Rechte Seite einer Seitenueberschrift: Sortierung und Nebenaktionen. */
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+
+/* Beschriftung und Auswahlfeld in einer Zeile. Die normale Feldklasse zieht
+   jede Eingabe auf volle Breite und passt darum nicht in die Kopfzeile. */
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+.inline-field select {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: inherit;
+  /* Gleiche Schriftgroesse wie die Pillenknoepfe daneben. */
+  font-size: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+}
+
 /* Pillenknoepfe: Hauptnavigation, Untertabs und Nebenaktionen sehen gleich aus. */
 .nav button,
 .tabs button,
@@ -269,6 +299,19 @@ strong {
 
 .row-actions > button {
   flex: 1 1 8rem;
+}
+
+/* Blaetterleiste unter langen Listen. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+}
+
+.pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .pay {
@@ -470,8 +513,7 @@ strong {
 
 .field input,
 .field select,
-.field textarea,
-.search {
+.field textarea {
   width: 100%;
   background: var(--bg);
   color: var(--ink);

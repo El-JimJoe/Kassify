@@ -557,7 +557,7 @@ async function renderHome() {
     );
   document
     .getElementById("all-minus")
-    ?.addEventListener("click", () => go("members", { boxId: state.boxId, minus: true, sort: "balance" }));
+    ?.addEventListener("click", () => go("members", { boxId: state.boxId, sort: "balanceAsc" }));
   document.getElementById("kick-sessions").addEventListener("click", async () => {
     try {
       const data = await api("/sessions");
@@ -579,17 +579,22 @@ function daysAgo(iso) {
   return Math.floor((Date.now() - then.getTime()) / 86400000);
 }
 
+/* Reihenfolgen der Mitgliederliste. Bei Gleichstand im Guthaben entscheidet der
+   Name, damit die Liste zwischen zwei Aufrufen nicht springt. */
+const MEMBER_SORTS = {
+  name: ["Name (A–Z)", (a, b) => a.name.localeCompare(b.name, "de")],
+  nameDesc: ["Name (Z–A)", (a, b) => b.name.localeCompare(a.name, "de")],
+  balanceAsc: ["Guthaben (niedrigstes zuerst)", (a, b) => a.balanceCents - b.balanceCents],
+  balanceDesc: ["Guthaben (höchstes zuerst)", (a, b) => b.balanceCents - a.balanceCents],
+};
+
 async function renderMembers() {
   const data = await api(`/cashboxes/${state.boxId}/members`);
   if (state.view !== "members") return;
-  const minusOnly = state.params.minus;
-  const sort = state.params.sort || "name";
-  let items = data.members;
-  if (minusOnly) items = items.filter((m) => m.balanceCents < 0);
-  const byName = (a, b) => a.name.localeCompare(b.name, "de");
-  // Beim Sortieren nach Guthaben zuerst die tiefsten Minusstände, damit
-  // offene Forderungen oben stehen. Gleichstand nach Name.
-  items.sort(sort === "balance" ? (a, b) => a.balanceCents - b.balanceCents || byName(a, b) : byName);
+  const sort = MEMBER_SORTS[state.params.sort] ? state.params.sort : "name";
+  const byName = MEMBER_SORTS.name[1];
+  const items = data.members;
+  items.sort((a, b) => MEMBER_SORTS[sort][1](a, b) || byName(a, b));
   const soll = items.reduce((s, m) => s + m.balanceCents, 0);
   const pos = items.reduce((s, m) => s + Math.max(m.balanceCents, 0), 0);
   const neg = items.reduce((s, m) => s + Math.min(m.balanceCents, 0), 0);
@@ -597,12 +602,20 @@ async function renderMembers() {
     !showIf(
       "members",
       `<section class="page">
-    ${pageHead("Mitglieder", canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : "")}
-    <div class="tabs">
-      <button class="ghost ${sort === "name" ? "active" : ""}" data-sort="name">Name</button>
-      <button class="ghost ${sort === "balance" ? "active" : ""}" data-sort="balance">Guthaben</button>
-      <button class="ghost" id="filter-minus">${minusOnly ? "Alle zeigen" : "Nur Minusstände"}</button>
-    </div>
+    ${pageHead(
+      "Mitglieder",
+      `<div class="head-actions">
+        <label class="inline-field">Sortierung
+          <select id="member-sort">${Object.entries(MEMBER_SORTS)
+            .map(
+              ([key, [label]]) =>
+                `<option value="${key}" ${key === sort ? "selected" : ""}>${label}</option>`
+            )
+            .join("")}</select>
+        </label>
+        ${canWrite() ? `<button class="ghost" id="add-member">Mitglied hinzufügen</button>` : ""}
+      </div>`
+    )}
     <ul class="list" id="member-list">
       ${
         items
@@ -626,11 +639,8 @@ async function renderMembers() {
     return;
   document.getElementById("add-member")?.addEventListener("click", () => go("member-new", { boxId: state.boxId }));
   document
-    .getElementById("filter-minus")
-    .addEventListener("click", () => go("members", { boxId: state.boxId, minus: !minusOnly, sort }));
-  view().querySelectorAll("[data-sort]").forEach((btn) =>
-    btn.addEventListener("click", () => go("members", { boxId: state.boxId, minus: minusOnly, sort: btn.dataset.sort }))
-  );
+    .getElementById("member-sort")
+    .addEventListener("change", (event) => go("members", { boxId: state.boxId, sort: event.target.value }));
   view().querySelectorAll("[data-id]").forEach((btn) =>
     btn.addEventListener("click", () => go("member", { boxId: state.boxId, memberId: Number(btn.dataset.id) }))
   );
@@ -643,8 +653,6 @@ function renderMemberNew() {
     ${pageHead("Mitglied hinzufügen")}
     <form id="member-form" class="stack">
       ${field("Anzeigename", "name")}
-      ${field("Kürzel", "shortName")}
-      ${field("Notiz", "note")}
       ${moneyField("Startguthaben (optional)", "start")}
       <label class="field">Woher kommt das Startguthaben?
         <select name="startKind">
@@ -664,8 +672,6 @@ function renderMemberNew() {
       method: "POST",
       body: JSON.stringify({
         name: data.name,
-        shortName: data.shortName,
-        note: data.note,
         startBalanceCents: parseEuro(data.start),
         startKind: data.startKind,
         date: requireDate(data.date),
@@ -675,82 +681,114 @@ function renderMemberNew() {
   });
 }
 
+const MEMBER_EVENTS_PER_PAGE = 10;
+
+/* Eine Seite aus der Ereignisliste eines Mitglieds samt Blaetterleiste. Die
+   Buchungen kommen vom Server neueste zuerst, Seite 1 zeigt also das Aktuelle. */
+function memberEvents(entries, page) {
+  const pages = Math.max(1, Math.ceil(entries.length / MEMBER_EVENTS_PER_PAGE));
+  const current = Math.min(page, pages);
+  const start = (current - 1) * MEMBER_EVENTS_PER_PAGE;
+  const rows = entries.slice(start, start + MEMBER_EVENTS_PER_PAGE);
+  const list = `<ul class="list">${
+    rows
+      .map((e) => {
+        const tag = e.kind.includes("correction") || e.kind.includes("void") ? " · Korrektur/Storno" : "";
+        return `<li>
+          <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${
+          KIND[e.kind] || esc(e.kind)
+        }${tag}</strong><span>${euro(e.amount_cents)}</span></div>
+          <div class="muted">${[esc(e.note || ""), `Saldo ${euro(e.runningCents)}`]
+            .filter(Boolean)
+            .join(" · ")}</div>
+        </li>`;
+      })
+      .join("") || `<li class="empty">Noch keine Ereignisse.</li>`
+  }</ul>`;
+  if (pages < 2) return list;
+  return `${list}
+    <div class="pager">
+      <button class="ghost" type="button" data-page="${current - 1}" ${current === 1 ? "disabled" : ""}>Zurück</button>
+      <span class="muted">Seite ${current} von ${pages}</span>
+      <button class="ghost" type="button" data-page="${current + 1}" ${
+    current === pages ? "disabled" : ""
+  }>Weiter</button>
+    </div>`;
+}
+
 async function renderMember() {
   const member = await api(`/cashboxes/${state.boxId}/members/${state.params.memberId}`);
   if (state.view !== "member") return;
   const tab = state.params.tab || "overview";
+  const page = Math.max(1, Number(state.params.page) || 1);
   let body = "";
-  if (tab === "ledger") {
-    body = `<ul class="list">${member.ledger
-      .map((e) => {
-        const tag = e.kind.includes("correction") || e.kind.includes("void") || e.kind === "correction" ? " · Korrektur/Storno" : "";
-        return `<li>
-          <div class="row-split"><strong>${isoToDE(e.booked_on)} · ${KIND[e.kind] || esc(e.kind)}${tag}</strong><span>${euro(e.amount_cents)}</span></div>
-          <div class="muted">${esc(e.note || "")} · Saldo ${euro(e.runningCents)}</div>
-        </li>`;
-      })
-      .join("")}</ul>`;
-  } else if (tab === "audit") {
+  if (tab === "audit") {
     body = auditList(member.audit);
+  } else if (tab === "deposit") {
+    body = `<form id="deposit-form" class="stack">
+      ${moneyField("Einzahlung", "amount")}
+      ${dateField("Datum", "date")}
+      ${field("Referenz", "note")}
+      <button class="pay" type="submit">Einzahlung speichern</button>
+    </form>`;
+  } else if (tab === "correction") {
+    body = `<form id="corr-form" class="stack">
+      ${moneyField("Korrektur (+/−)", "amount")}
+      ${dateField("Datum", "date")}
+      ${field("Begründung", "note")}
+      <p class="hint">Eine Korrektur ändert nur das Guthaben, sie bewegt kein Geld.</p>
+      <button class="pay" type="submit">Korrektur buchen</button>
+    </form>`;
+  } else if (tab === "settle") {
+    body = `<form id="settle-form" class="stack">
+      <div class="row grand"><span>Guthaben</span>${balanceSpan(member.balanceCents)}</div>
+      <label class="field">Saldo ausgleichen
+        <select name="reason">
+          <option value="payout">Auszahlung (positiver Saldo)</option>
+          <option value="deposit">Einzahlung (negativer Saldo)</option>
+          <option value="writeoff">Ausfall (kein Geld)</option>
+        </select>
+      </label>
+      <p class="hint">Die App bewegt kein Geld. Zahlung muss real erfolgen. Ausfall mindert den Überschuss und ist keine Geldbewegung.</p>
+      ${dateField("Datum", "date")}
+      ${field("Begründung bei Ausfall", "note")}
+      <button class="pay" type="submit">Auf 0,00 € setzen</button>
+    </form>`;
   } else {
     body = `<div class="stack">
-      <div class="row grand"><span>Guthaben</span>${balanceSpan(member.balanceCents)}</div>
-      ${
-        member.short_name || member.note
-          ? `<p class="muted">${[esc(member.short_name || ""), esc(member.note || "")].filter(Boolean).join(" · ")}</p>`
-          : ""
-      }
       ${
         canWrite()
-          ? `<form id="deposit-form" class="stack">
-              ${moneyField("Einzahlung", "amount")}
-              ${dateField("Datum", "date")}
-              ${field("Referenz", "note")}
-              <button class="pay" type="submit">Einzahlung speichern</button>
-            </form>
-            <form id="corr-form" class="stack">
-              ${moneyField("Korrektur (+/−)", "amount")}
-              ${dateField("Datum", "date")}
-              ${field("Begründung", "note")}
-              <button class="ghost" type="submit">Korrektur buchen</button>
-            </form>
-            <form id="settle-form" class="stack">
-              <label class="field">Saldo ausgleichen
-                <select name="reason">
-                  <option value="payout">Auszahlung (positiver Saldo)</option>
-                  <option value="deposit">Einzahlung (negativer Saldo)</option>
-                  <option value="writeoff">Ausfall (kein Geld)</option>
-                </select>
-              </label>
-              <p class="hint">Die App bewegt kein Geld. Zahlung muss real erfolgen. Ausfall mindert den Überschuss und ist keine Geldbewegung.</p>
-              ${dateField("Datum", "date")}
-              ${field("Begründung bei Ausfall", "note")}
-              <button class="ghost" type="submit">Auf 0,00 € setzen</button>
-            </form>
-            <form id="edit-form" class="stack">
+          ? `<form id="edit-form" class="stack">
               ${field("Name", "name", member.name)}
-              ${field("Kürzel", "shortName", member.short_name)}
-              ${field("Notiz", "note", member.note)}
-              <button class="ghost" type="submit">Stammdaten speichern</button>
-            </form>
-            <div class="row-actions">
+              <button class="ghost" type="submit">Namen speichern</button>
+            </form>`
+          : ""
+      }
+      <div class="row grand"><span>Guthaben</span>${balanceSpan(member.balanceCents)}</div>
+      ${
+        canWrite()
+          ? `<div class="row-actions">
               <button class="ghost" id="toggle-active">${member.active ? "Deaktivieren" : "Reaktivieren"}</button>
               <button class="ghost danger" id="delete-member">Entfernen</button>
             </div>
             <p class="hint">Deaktivieren behält alle Buchungen und nimmt das Mitglied nur aus den Listen. Entfernen geht nur, solange keine Striche und kein Geld erfasst sind.</p>`
           : ""
       }
+      <h3>Ereignisse</h3>
+      ${memberEvents(member.ledger, page)}
     </div>`;
   }
   if (
     !showIf(
       "member",
       `<section class="page">
-    ${pageHead(esc(member.name))}
+    ${pageHead(esc(member.name) + (member.active ? "" : " · inaktiv"))}
     ${tabBar(
       [
         ["overview", "Übersicht"],
-        ["ledger", "Buchungen"],
+        canWrite() && ["deposit", "Einzahlung"],
+        canWrite() && ["correction", "Korrektur"],
+        canWrite() && ["settle", "Auf 0 setzen"],
         ["audit", "Protokoll"],
       ],
       tab
@@ -764,34 +802,46 @@ async function renderMember() {
   view().querySelectorAll("[data-tab]").forEach((btn) =>
     btn.addEventListener("click", () => go("member", { boxId: state.boxId, memberId: member.id, tab: btn.dataset.tab }))
   );
-  if (tab === "overview" && canWrite()) {
+  view().querySelectorAll("[data-page]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      go("member", { boxId: state.boxId, memberId: member.id, tab, page: Number(btn.dataset.page) })
+    )
+  );
+  const done = () => go("member", { boxId: state.boxId, memberId: member.id });
+  if (tab === "deposit" && canWrite()) {
     bindForm("deposit-form", async (data) => {
       await api(`/cashboxes/${state.boxId}/members/${member.id}/deposit`, {
         method: "POST",
         body: JSON.stringify({ amountCents: parseEuro(data.amount), date: requireDate(data.date), note: data.note }),
       });
-      go("member", { boxId: state.boxId, memberId: member.id });
+      done();
     });
+  }
+  if (tab === "correction" && canWrite()) {
     bindForm("corr-form", async (data) => {
       await api(`/cashboxes/${state.boxId}/members/${member.id}/correction`, {
         method: "POST",
         body: JSON.stringify({ amountCents: parseEuro(data.amount), date: requireDate(data.date), note: data.note }),
       });
-      go("member", { boxId: state.boxId, memberId: member.id });
+      done();
     });
+  }
+  if (tab === "settle" && canWrite()) {
     bindForm("settle-form", async (data) => {
       await api(`/cashboxes/${state.boxId}/members/${member.id}/settle`, {
         method: "POST",
         body: JSON.stringify({ reason: data.reason, date: requireDate(data.date), note: data.note }),
       });
-      go("member", { boxId: state.boxId, memberId: member.id });
+      done();
     });
+  }
+  if (tab === "overview" && canWrite()) {
     bindForm("edit-form", async (data) => {
       await api(`/cashboxes/${state.boxId}/members/${member.id}`, {
         method: "PUT",
-        body: JSON.stringify({ name: data.name, shortName: data.shortName, note: data.note }),
+        body: JSON.stringify({ name: data.name }),
       });
-      go("member", { boxId: state.boxId, memberId: member.id });
+      done();
     });
     document.getElementById("toggle-active").addEventListener("click", async () => {
       const path = member.active ? "deactivate" : "reactivate";
@@ -998,8 +1048,6 @@ function auditList(items, names = {}) {
     .join("")}</ul>`;
 }
 
-const PAY_HITS_SHOWN = 8;
-
 function payTabs(active) {
   return tabBar(
     [
@@ -1025,71 +1073,53 @@ async function renderPay() {
       `<section class="page">
     ${pageHead("Einzahlung")}
     ${payTabs("deposit")}
-    <form id="pay-form" class="stack" hidden>
-      <p id="pay-who"></p>
+    <form id="pay-form" class="stack">
+      <label class="field">Mitglied
+        <input name="member" id="pay-member" list="pay-members" autocomplete="off"
+          placeholder="Name eintippen oder aus der Liste wählen" />
+      </label>
+      <datalist id="pay-members">${members
+        .map((m) => `<option value="${esc(m.name)}" label="${euro(m.balanceCents)}"></option>`)
+        .join("")}</datalist>
+      <p class="muted" id="pay-who">Noch kein Mitglied gewählt.</p>
       ${moneyField("Betrag", "amount")}
       ${dateField("Datum", "date")}
       ${field("Referenz", "note")}
       <button class="pay" type="submit">Speichern</button>
       <p class="error" id="form-error" hidden></p>
     </form>
-    <h3>Mitglied wählen</h3>
-    <div class="stack">
-      <input class="search" id="pay-search" placeholder="Mitglied suchen" aria-label="Mitglied suchen" />
-      <ul id="pay-hits" class="list"></ul>
-      <p class="muted" id="pay-more" hidden></p>
-    </div>
   </section>`
     )
   )
     return;
-  let chosen = null;
-  const hits = document.getElementById("pay-hits");
-  const more = document.getElementById("pay-more");
-  const form = document.getElementById("pay-form");
-  /* Bei vielen Mitgliedern wird die Liste unbenutzbar lang. Ohne Suchbegriff
-     stehen deshalb nur die ersten Namen da, der Rest kommt ueber die Suche. */
-  function show(filter) {
-    const q = filter.trim().toLowerCase();
-    const found = members.filter(
-      (m) => !q || m.name.toLowerCase().includes(q) || (m.short_name || "").toLowerCase().includes(q)
-    );
-    const shown = found.slice(0, PAY_HITS_SHOWN);
-    hits.replaceChildren();
-    shown.forEach((m) => {
-      const item = el(
-        `<li><button class="row-btn ${
-          m.id === chosen?.id ? "active" : ""
-        }" type="button"><div class="row-split"><strong>${esc(m.name)}</strong>${balanceSpan(
-          m.balanceCents
-        )}</div></button></li>`
-      );
-      const btn = item.querySelector("button");
-      btn.addEventListener("click", () => {
-        chosen = m;
-        document.getElementById("pay-who").innerHTML = `<span class="row-split"><strong>${esc(
-          m.name
-        )}</strong>${balanceSpan(m.balanceCents)}</span>`;
-        form.hidden = false;
-        show(filter);
-        form.querySelector('[name="amount"]').focus();
-      });
-      hits.appendChild(item);
-    });
-    if (!found.length) {
-      more.hidden = false;
-      more.textContent = "Kein Mitglied gefunden.";
-    } else if (found.length > shown.length) {
-      more.hidden = false;
-      more.textContent = `${found.length - shown.length} weitere · Namen eintippen, um sie zu finden.`;
-    } else {
-      more.hidden = true;
+  /* Das Auswahlfeld ist ein Textfeld mit Vorschlagsliste: der Browser filtert
+     die Namen beim Tippen selbst. Uebrig bleibt der Abgleich des Eingetippten
+     mit der Mitgliederliste. */
+  const match = (text) => {
+    const q = String(text || "").trim().toLowerCase();
+    return q ? members.find((m) => m.name.toLowerCase() === q) || null : null;
+  };
+  const who = document.getElementById("pay-who");
+  const input = document.getElementById("pay-member");
+  const error = document.querySelector("#pay-form .error");
+  input.addEventListener("input", () => {
+    error.hidden = true;
+    const found = match(input.value);
+    if (found) {
+      who.className = "";
+      who.innerHTML = `<span class="row-split"><strong>${esc(found.name)}</strong>${balanceSpan(
+        found.balanceCents
+      )}</span>`;
+      return;
     }
-  }
-  document.getElementById("pay-search").addEventListener("input", (e) => show(e.target.value));
-  show("");
+    who.className = "muted";
+    who.textContent = input.value.trim()
+      ? "Noch kein Treffer – Namen aus der Liste wählen."
+      : "Noch kein Mitglied gewählt.";
+  });
   bindForm("pay-form", async (data) => {
-    if (!chosen) throw new Error("Mitglied wählen.");
+    const chosen = match(data.member);
+    if (!chosen) throw new Error("Bitte ein Mitglied aus der Liste wählen.");
     await api(`/cashboxes/${state.boxId}/members/${chosen.id}/deposit`, {
       method: "POST",
       body: JSON.stringify({ amountCents: parseEuro(data.amount), date: requireDate(data.date), note: data.note }),
