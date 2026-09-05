@@ -72,16 +72,18 @@ def summary_from_dump(payload):
                 continue
             balances[mid] = balances.get(mid, 0) + int(entry.get("amount_cents") or 0)
         soll = sum(balances.values())
-        snaps = sorted(box.get("snapshots") or [], key=lambda s: (s.get("booked_on") or "", s.get("id") or 0))
-        ist = snaps[-1]["amount_cents"] if snaps else box.get("opening_balance_cents") or 0
+        # Gleiche Rechnung wie in der Übersicht, damit sich die Zahlen
+        # vergleichen lassen: Anfangsbestand plus alle Geldbewegungen.
+        money = sum(int(entry.get("money_cents") or 0) for entry in ledger)
+        account_now = int(box.get("opening_balance_cents") or 0) + money
         out.append(
             {
                 "name": box.get("name"),
                 "memberCount": len(members),
                 "bookingCount": len(ledger),
                 "sollCents": soll,
-                "istCents": ist,
-                "surplusCents": ist - soll,
+                "accountNowCents": account_now,
+                "surplusCents": account_now - soll,
             }
         )
     return out

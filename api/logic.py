@@ -66,18 +66,41 @@ def soll_on(cashbox_id, date):
     return int(row["n"] if row else 0)
 
 
-def expected_balance(cashbox, as_of):
-    """Kontostand, der am Stichtag des Ist-Standes auf dem Konto liegen müsste.
+def money_total(cashbox_id):
+    row = one(
+        "SELECT COALESCE(SUM(money_cents), 0) AS n FROM ledger WHERE cashbox_id = ?",
+        (cashbox_id,),
+    )
+    return int(row["n"] if row else 0)
 
-    Bewegungen am Tag des Anfangsbestandes stecken bereits in diesem, Bewegungen
-    nach dem Stichtag sind im erfassten Ist-Stand noch nicht enthalten.
+
+def expected_now(cashbox):
+    """Betrag, der in diesem Moment auf dem Konto liegen muss.
+
+    Anfangsbestand plus alles Geld, das seither hereinkam oder herausging. Was
+    beim Anlegen schon im Anfangsbestand steckte, ist als nicht geldwirksam
+    erfasst und zählt hier deshalb nicht doppelt.
+
+    Das ist der Kontrollwert: stimmt er nicht mit dem echten Konto überein,
+    fehlt Geld oder eine Buchung.
+    """
+    return cashbox["opening_balance_cents"] + money_total(cashbox["id"])
+
+
+def expected_balance(cashbox, as_of):
+    """Kontostand, der am Stichtag auf dem Konto liegen müsste.
+
+    Gerechnet wird wie bei `expected_now`, nur bis zum Stichtag. Auch
+    Bewegungen am Tag des Anfangsbestandes zählen mit: was schon im
+    Anfangsbestand steckt, ist als nicht geldwirksam erfasst. Bewegungen nach
+    dem Stichtag bleiben draußen, sie sind im erfassten Stand noch nicht drin.
     """
     flows = one(
         """
         SELECT COALESCE(SUM(money_cents), 0) AS n FROM ledger
-        WHERE cashbox_id = ? AND booked_on > ? AND booked_on <= ?
+        WHERE cashbox_id = ? AND booked_on <= ?
         """,
-        (cashbox["id"], cashbox["opening_date"], as_of),
+        (cashbox["id"], as_of),
     )
     return cashbox["opening_balance_cents"] + int(flows["n"] if flows else 0)
 
@@ -100,17 +123,24 @@ def metrics(cashbox):
     snap = last_snapshot(cashbox_id)
     ist = snap["amount_cents"] if snap else cashbox["opening_balance_cents"]
     ist_date = snap["booked_on"] if snap else cashbox["opening_date"]
-    surplus = ist - soll
-    available = ist - positive
+    # Überschuss und Verfügbarkeit rechnen gegen den errechneten Kontostand,
+    # nicht gegen den letzten erfassten. Sonst fällt der Überschuss jedes Mal,
+    # wenn jemand seine Schulden zahlt, obwohl das Geld gerade hereinkam.
+    kontostand = expected_now(cashbox)
+    surplus = kontostand - soll
+    available = kontostand - positive
     expenses = open_expenses(cashbox_id)
     erwartet = expected_balance(cashbox, ist_date)
-    deviation = erwartet - ist
+    # Ohne erfassten Kontostand gibt es nichts zu vergleichen.
+    deviation = erwartet - ist if snap else 0
     active = one("SELECT COUNT(*) AS n FROM members WHERE cashbox_id = ? AND active = 1", (cashbox_id,))
     total = one("SELECT COUNT(*) AS n FROM members WHERE cashbox_id = ?", (cashbox_id,))
     return {
         "memberCount": int(active["n"] if active else 0),
         "totalMemberCount": int(total["n"] if total else 0),
         "sollCents": soll,
+        "accountNowCents": kontostand,
+        "hasSnapshot": bool(snap),
         "istCents": ist,
         "istDate": ist_date,
         "surplusCents": surplus,
@@ -129,7 +159,12 @@ def metrics(cashbox):
 
 
 def surplus_history(cashbox):
-    """Überschuss je erfasstem Kontostand — jeweils gegen das Soll von diesem Tag."""
+    """Überschuss zu jedem erfassten Kontostand.
+
+    Gerechnet wird wie in der Übersicht: errechneter Kontostand minus
+    Kassen-Soll. Dazu steht, was an dem Tag wirklich auf dem Konto lag und wie
+    groß die Lücke war.
+    """
     snaps = rows(
         """
         SELECT booked_on, amount_cents FROM account_snapshots
@@ -138,12 +173,21 @@ def surplus_history(cashbox):
         """,
         (cashbox["id"],),
     )
-    points = [(cashbox["opening_date"], cashbox["opening_balance_cents"])]
-    points += [(snap["booked_on"], snap["amount_cents"]) for snap in snaps]
     history = []
-    for date, ist in points:
+    for snap in snaps:
+        date = snap["booked_on"]
         soll = soll_on(cashbox["id"], date)
-        history.append({"date": date, "istCents": ist, "sollCents": soll, "surplusCents": ist - soll})
+        erwartet = expected_balance(cashbox, date)
+        history.append(
+            {
+                "date": date,
+                "istCents": snap["amount_cents"],
+                "expectedCents": erwartet,
+                "sollCents": soll,
+                "surplusCents": erwartet - soll,
+                "deviationCents": erwartet - snap["amount_cents"],
+            }
+        )
     return history
 
 

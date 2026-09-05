@@ -365,7 +365,9 @@ async function renderBoxes() {
     .map(
       (box) => `<li><button class="row-btn" data-id="${box.id}">
         <div class="row-split"><strong>${esc(box.name)}</strong><span>${box.memberCount} Mitglieder</span></div>
-        <div class="row-split muted"><span>Soll ${euro(box.sollCents)}</span><span>Ist ${euro(box.istCents)}</span></div>
+        <div class="row-split muted"><span>Kassen-Soll ${euro(box.sollCents)}</span><span>Konto ${euro(
+        box.accountNowCents
+      )}</span></div>
         <div class="row-split"><span>Überschuss</span><strong>${euro(box.surplusCents)}</strong></div>
       </button></li>`
     )
@@ -440,7 +442,12 @@ async function renderHome() {
   state.me.cashboxName = box.name;
   const stale = daysAgo(box.istDate) > 28;
   const backupStale = state.me.lastBackupAt && daysAgo(state.me.lastBackupAt.slice(0, 10)) > 28;
-  if (stale) setBanner(`Ist-Kontostand vom ${isoToDE(box.istDate)} — älter als vier Wochen.`);
+  if (stale)
+    setBanner(
+      box.hasSnapshot
+        ? `Kontostand zuletzt am ${isoToDE(box.istDate)} geprüft — älter als vier Wochen.`
+        : "Es ist noch kein echter Kontostand erfasst."
+    );
   else if (isAdmin() && backupStale) setBanner("Letzter Export ist länger her. Sicherung anfertigen.");
   const deviation = box.deviationCents !== 0;
   if (
@@ -449,22 +456,31 @@ async function renderHome() {
       `<section>
     <div class="catalog-head"><h2>${esc(box.name)}</h2><p>${box.memberCount} Mitglieder · ${box.minusCount} im Minus</p></div>
     <div class="metrics">
+      ${metricCard("Kontostand jetzt", box.accountNowCents)}
       ${metricCard("Kassen-Soll", box.sollCents)}
-      ${metricCard("Ist-Kontostand", box.istCents)}
       ${metricCard("Überschuss", box.surplusCents)}
       ${metricCard("Verfügbar", box.availableCents)}
       ${metricCard("Verbindlichkeit", box.liabilityCents)}
       ${metricCard("Forderung", box.receivableCents)}
       ${metricCard("Offene Auslagen", box.openExpenseCents)}
       ${metricCard("Verfügbar nach Auslagen", box.availableAfterExpensesCents)}
-      ${metricCard(`Erwartet zum ${isoToDE(box.expectedDate)}`, box.expectedCents)}
-      ${metricCard("Abweichung", box.deviationCents, deviation)}
       ${metricCard("Ausfälle", box.writeoffCents)}
+      ${
+        box.hasSnapshot
+          ? `${metricCard(`Zuletzt erfasst am ${isoToDE(box.istDate)}`, box.istCents)}
+             ${metricCard("Abweichung", box.deviationCents, deviation)}`
+          : ""
+      }
     </div>
+    <p class="hint">„Kontostand jetzt“ ist der Anfangsbestand plus alle erfassten Geldbewegungen — so viel muss in diesem Moment auf dem Konto liegen. Weicht das echte Konto davon ab, fehlt Geld oder eine Buchung.</p>
     ${
-      box.flowsSinceIstCents
-        ? `<p class="hint">Seit dem Ist-Stand vom ${isoToDE(box.istDate)} sind ${euro(box.flowsSinceIstCents)} auf dem Konto bewegt worden. Für die Abweichung zählen sie erst mit dem nächsten erfassten Stand.</p>`
-        : ""
+      box.hasSnapshot
+        ? box.flowsSinceIstCents
+          ? `<p class="hint">Seit dem erfassten Stand vom ${isoToDE(box.istDate)} sind ${euro(
+              box.flowsSinceIstCents
+            )} bewegt worden.</p>`
+          : ""
+        : `<p class="hint">Es ist noch kein Kontostand erfasst. Trage unter „Konto“ ein, was wirklich auf dem Konto liegt, dann prüft die App die Abweichung.</p>`
     }
     <p><button class="ghost" type="button" id="kick-sessions">Andere Geräte abmelden</button></p>
   </section>`
@@ -1300,26 +1316,42 @@ async function renderAccount() {
   let body = "";
   if (tab === "audit") body = auditList(data.audit);
   else {
+    const m = data.metrics;
     body = `${link}
       <div class="metrics">
-        ${metricCard(`Ist vom ${isoToDE(data.metrics.istDate)}`, data.metrics.istCents)}
-        ${metricCard(`Erwartet zum ${isoToDE(data.metrics.expectedDate)}`, data.metrics.expectedCents)}
-        ${metricCard("Abweichung", data.metrics.deviationCents, data.metrics.deviationCents !== 0)}
-        ${metricCard("Überschuss", data.metrics.surplusCents)}
+        ${metricCard("Kontostand jetzt", m.accountNowCents)}
+        ${metricCard("Überschuss", m.surplusCents)}
+        ${
+          m.hasSnapshot
+            ? `${metricCard(`Zuletzt erfasst am ${isoToDE(m.istDate)}`, m.istCents)}
+               ${metricCard(`Erwartet zu diesem Tag`, m.expectedCents)}
+               ${metricCard("Abweichung", m.deviationCents, m.deviationCents !== 0)}`
+            : ""
+        }
       </div>
+      <p class="hint">„Kontostand jetzt“ ist der Anfangsbestand von ${euro(
+        data.account.openingBalanceCents
+      )} plus alle erfassten Geldbewegungen. Erfasse unten, was wirklich auf dem Konto liegt — stimmen die beiden Zahlen nicht überein, zeigt die Abweichung die Lücke.</p>
       <h3>Überschuss-Verlauf</h3>
-      <ul class="list">${data.surplusHistory
-        .map(
-          (h) => `<li>
-            <div class="row-split"><span>${isoToDE(h.date)}</span><strong>${euro(h.surplusCents)}</strong></div>
-            <div class="muted">Ist ${euro(h.istCents)} − Soll ${euro(h.sollCents)}</div>
+      <ul class="list">${
+        data.surplusHistory
+          .map(
+            (h) => `<li>
+            <div class="row-split"><span>${isoToDE(h.date)}</span><strong>Überschuss ${euro(
+              h.surplusCents
+            )}</strong></div>
+            <div class="muted">Konto ${euro(h.expectedCents)} − Kassen-Soll ${euro(h.sollCents)}</div>
+            <div class="${h.deviationCents ? "minus" : "muted"}">Erfasst ${euro(h.istCents)}${
+              h.deviationCents ? ` · Abweichung ${euro(h.deviationCents)}` : " · ohne Abweichung"
+            }</div>
           </li>`
-        )
-        .join("")}</ul>
+          )
+          .join("") || `<li class="empty">Noch kein Kontostand erfasst.</li>`
+      }</ul>
       ${
         canWrite()
           ? `<form id="snap-form" class="stack">
-              <h3>Ist-Stand erfassen</h3>
+              <h3>Kontostand erfassen</h3>
               ${moneyField("Betrag", "amount")}
               ${dateField("Datum", "date")}
               ${field("Quelle", "source", "", `placeholder="PayPal-Screenshot"`)}
@@ -1658,7 +1690,9 @@ async function showExportSummary(payload, fileName) {
           .map(
             (c) => `<li>
               <div class="row-split"><strong>${esc(c.name)}</strong><span>${c.memberCount} Mitglieder</span></div>
-              <div class="row-split muted"><span>${c.bookingCount} Buchungen</span><span>Soll ${euro(c.sollCents)} · Ist ${euro(c.istCents)}</span></div>
+              <div class="row-split muted"><span>${c.bookingCount} Buchungen</span><span>Kassen-Soll ${euro(
+              c.sollCents
+            )} · Konto ${euro(c.accountNowCents)}</span></div>
             </li>`
           )
           .join("")}
@@ -1725,7 +1759,9 @@ async function renderManage() {
     </form>
     <form id="del-form" class="stack">
       <h3>Kasse löschen</h3>
-      <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Soll ${euro(box.sollCents)}, Ist ${euro(box.istCents)}. Zuerst Export.</p>
+      <p class="hint">Endgültig. ${box.totalMemberCount} Mitglieder, Kassen-Soll ${euro(
+      box.sollCents
+    )}, Konto ${euro(box.accountNowCents)}. Zuerst Export.</p>
       <button class="ghost" type="button" id="export-before">Export dieser Kasse</button>
       ${field("Vollständigen Kassennamen eintippen", "confirmName")}
       <button class="pay danger" type="submit">Unwiderruflich löschen</button>
